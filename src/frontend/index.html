@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>研究生学术助手 - RAG文献问答系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3b82f6',
+                        secondary: '#64748b',
+                        success: '#10b981',
+                        danger: '#ef4444',
+                        warning: '#f59e0b',
+                        chatbg: '#f1f5f9',
+                        usermsg: '#dbeafe',
+                        llmmsg: '#f0fdf4'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto {content-visibility: auto;}
+            .drop-zone-active {@apply border-primary bg-primary/5;}
+            .scrollbar-thin {scrollbar-width: thin;}
+            .scrollbar-thin::-webkit-scrollbar {width:6px;}
+            .scrollbar-thin::-webkit-scrollbar-track {background:#f1f5f9;}
+            .scrollbar-thin::-webkit-scrollbar-thumb {background:#cbd5e1;border-radius:3px;}
+            .scrollbar-thin::-webkit-scrollbar-thumb:hover {background:#94a3b8;}
+            .selected-item {@apply ring-2 ring-primary bg-primary/5}
+            .summary-card {background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);}
+            .paper-badge {padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 500;}
+            .compare-section {background: #fff; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1);}
+            .highlight-box {background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); border-left: 4px solid #3b82f6; padding: 0.75rem 1rem; border-radius: 0 0.375rem 0.375rem 0;}
+            /* loading旋转工具类 */
+            .fa-spin-fast {animation: spin 0.7s linear infinite;}
+            @keyframes spin {from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        }
+    </style>
+</head>
+<body class="bg-gray-50 h-screen overflow-hidden">
+    <!-- 全屏容器：固定视口高度 -->
+    <div class="w-full p-[15px] pb-[20px] h-full flex flex-col overflow-hidden">
+        <!-- 头部 -->
+        <header class="mb-5 flex-shrink-0">
+            <h1 class="text-3xl font-bold text-gray-800 mb-1">
+                <i class="fa fa-graduation-cap text-primary mr-2"></i>研究生学术助手
+            </h1>
+            <p class="text-gray-600">PDF批量解析｜向量知识库｜DeepSeek RAG问答｜论文精读｜多文献对比</p>
+        </header>
+
+        <!-- grid加items-stretch 三栏自动上下等高，固定高度 -->
+        <div class="grid grid-cols-1 lg:grid-cols-[260px_0.8fr_1.7fr] gap-5 items-stretch flex-1 overflow-hidden">
+            <!-- 左栏：上传+统计+知识库 | 固定高度，内容可滚动 -->
+            <div class="lg:col-span-1 space-y-3 flex flex-col overflow-hidden">
+                <!-- 上传面板：调小尺寸 -->
+                <div class="bg-white rounded-xl shadow-sm p-2 flex-shrink-0 min-h-[230px]">
+                    <h2 class="text-sm font-semibold text-gray-800 mb-2"><i class="fa fa-cloud-upload text-primary mr-1.5"></i>上传PDF文献</h2>
+                    <div id="dropZone" class="border-2 border-dashed border-gray-300 rounded-lg p-3 text-center cursor-pointer hover:border-primary hover:bg-gray-50 transition-all">
+                        <i class="fa fa-file-pdf-o text-2xl text-gray-400 mb-1.5"></i>
+                        <p class="text-gray-600 text-sm">拖拽PDF至此 / 点击选择文件</p>
+                        <input type="file" id="fileInput" accept=".pdf" multiple class="hidden">
+                        <button id="selectFilesBtn" class="mt-1.5 bg-primary text-white px-3 py-1.5 rounded-lg text-sm">选择文件</button>
+                    </div>
+                    <div id="uploadProgress" class="mt-2 hidden">
+                        <div class="flex justify-between items-center mb-1.5">
+                            <span id="uploadFileName" class="text-xs text-gray-600 font-medium"></span>
+                            <div class="flex items-center gap-1.5">
+                                <i id="progressSpinner" class="fa fa-spinner fa-spin-fast text-primary text-xs"></i>
+                                <span id="uploadPercent" class="text-xs font-semibold text-primary">0%</span>
+                            </div>
+                        </div>
+                        <div class="w-full bg-gray-100 rounded-full h-2 shadow-inner">
+                            <div id="progressBar" class="h-2 rounded-full bg-gradient-to-r from-primary to-blue-400 transition-all duration-300 ease-out shadow-md" style="width:0%"></div>
+                        </div>
+                        <!-- <div id="progressHint" class="text-xs text-gray-500 mt-1 text-center">正在解析文档...</div> -->
+                    </div>
+                    <div id="uploadStatus" class="mt-1.5 hidden"><div id="statusMessage" class="p-1.5 rounded text-xs border"></div></div>
+                </div>
+
+                <!-- 文献统计：p5→p4，space-y3→space-y2紧凑排版 -->
+                <div class="bg-white rounded-xl shadow-sm p-3 flex-shrink-0">
+                    <h2 class="text-base font-semibold text-gray-800 mb-2"><i class="fa fa-bar-chart text-primary mr-2"></i>文献统计</h2>
+                    <div class="space-y-1.5">
+                        <div class="flex justify-between items-center"><span class="text-gray-600 text-sm">总文献</span><span id="totalDocs" class="text-lg font-bold text-primary">0</span></div>
+                        <div class="flex justify-between items-center"><span class="text-gray-600 text-sm">解析成功</span><span id="successDocs" class="text-lg font-bold text-success">0</span></div>
+                        <div class="flex justify-between items-center"><span class="text-gray-600 text-sm">解析失败</span><span id="failedDocs" class="text-lg font-bold text-danger">0</span></div>
+                    </div>
+                </div>
+
+                <!-- 知识库统计：p5→p4，紧凑间距 -->
+                <div class="bg-white rounded-xl shadow-sm p-3 flex-1 flex flex-col overflow-hidden">
+                    <div class="flex justify-between items-center mb-2 flex-shrink-0">
+                        <h2 class="text-base font-semibold text-gray-800"><i class="fa fa-database text-primary mr-2"></i>向量知识库</h2>
+                        <button id="refreshKBStatsBtn" class="text-xs text-primary"><i class="fa fa-refresh"></i></button>
+                    </div>
+                    <div class="space-y-2 overflow-y-auto scrollbar-thin flex-1">
+                        <div class="flex justify-between items-center"><span class="text-gray-600 text-sm">入库文献</span><span id="kbDocumentCount" class="text-lg font-bold text-primary">0</span></div>
+                        <div class="flex justify-between items-center"><span class="text-gray-600 text-sm">向量分片</span><span id="kbChunkCount" class="text-lg font-bold text-primary">0</span></div>
+                        <div class="flex justify-between items-center"><span class="text-gray-600 text-sm">嵌入维度</span><span id="kbEmbeddingDim" class="text-lg font-bold text-primary">-</span></div>
+                    </div>
+                    <button id="clearKBBtn" class="w-full mt-2 bg-danger/10 text-danger py-1.5 rounded text-sm hover:bg-danger/20 flex-shrink-0">清空知识库</button>
+                </div>
+            </div>
+
+            <!-- 中栏：文献列表 条目收窄优化，去掉固定max-h，自动高度+滚动 -->
+            <div class="lg:col-span-1 flex flex-col overflow-hidden">
+                <div class="bg-white rounded-xl shadow-sm p-4 h-full flex flex-col">
+                    <div class="flex justify-between items-center mb-3 flex-shrink-0">
+                        <h2 class="text-xl font-semibold text-gray-800"><i class="fa fa-list-alt text-primary mr-2"></i>文献列表</h2>
+                        <div class="flex gap-2">
+                            <button id="refreshBtn" class="text-sm text-primary"><i class="fa fa-refresh"></i>刷新</button>
+                            <button id="startCompareBtn" class="text-sm bg-warning/10 text-warning px-3 py-1.5 rounded">批量对比</button>
+                        </div>
+                    </div>
+                    <div class="text-sm text-gray-500 mb-3 flex-shrink-0">已勾选 <span id="selectCount">0</span> 篇用于对比</div>
+                    <!-- 移除max-h固定高度，flex-1自动填充，内容溢出自动滚动 -->
+                    <div id="documentList" class="flex-1 overflow-y-auto scrollbar-thin space-y-3 px-2 pt-1">
+                        <div class="text-center text-gray-500 py-12"><i class="fa fa-file-text-o text-sm mb-2 text-gray-400"></i><p class="text-gray-500">暂无文献，请上传PDF</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右栏：RAG区域加宽，聊天框拉高，解决对话过小 -->
+            <div class="lg:col-span-1 space-y-4 flex flex-col overflow-hidden">
+                <!-- DeepSeek RAG对话：聊天框360→450高度扩容 -->
+                <div class="bg-white rounded-xl shadow-sm p-4 flex-1 flex flex-col overflow-hidden">
+                    <div class="flex justify-between items-center mb-3 flex-shrink-0">
+                        <h2 class="text-lg font-semibold text-gray-800"><i class="fa fa-comments text-primary mr-2"></i>DeepSeek RAG智能问答</h2>
+                        <button id="clearChatBtn" class="text-sm text-gray-500 hover:text-danger" onclick="clearChatHistory()"><i class="fa fa-trash-o"></i> 清除对话</button>
+                    </div>
+                    <div id="chatBox" class="flex-1 overflow-y-auto scrollbar-thin bg-chatbg rounded-lg p-3 mb-3 space-y-3">
+                        <div class="text-center text-gray-500 py-12 text-sm text-gray-500">输入问题，基于已入库文献回答<br><span class="text-xs text-gray-400">支持多轮对话记忆</span></div>
+                    </div>
+                    <div class="flex gap-2 flex-shrink-0">
+                        <input id="qaInput" placeholder="例如：论文的实验方法是什么？" class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+                        <button id="sendQaBtn" class="bg-primary text-white px-3 py-2 rounded-lg text-sm">发送</button>
+                    </div>
+                </div>
+                <!-- 知识库片段检索 -->
+                <div class="bg-white rounded-xl shadow-sm p-4 flex-shrink-0">
+                    <h2 class="text-lg font-semibold text-gray-800 mb-3"><i class="fa fa-search text-primary mr-2"></i>知识库片段检索</h2>
+                    <div class="flex gap-2 mb-3 flex-shrink-0">
+                        <input type="text" id="searchQuery" placeholder="关键词检索文献片段" class="flex-1 px-3 py-2 border rounded text-sm">
+                        <button id="searchBtn" class="bg-primary text-white px-3 py-2 rounded text-sm">检索</button>
+                    </div>
+                    <div id="searchResults" class="max-h-[220px] overflow-y-auto scrollbar-thin space-y-2">
+                        <div class="text-center text-gray-500 py-6 text-gray-500 text-sm">输入内容检索</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 文献详情弹窗 -->
+    <div id="detailModal" class="fixed inset-0 bg-black/50 hidden z-50 flex items-center justify-center">
+        <div class="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div class="p-5 border-b flex justify-between items-center">
+                <h3 id="modalTitle" class="font-semibold text-lg">文献详情</h3>
+                <button id="closeModalBtn" class="text-gray-500 text-xl"><i class="fa fa-times"></i></button>
+            </div>
+            <div id="modalContent" class="p-5 overflow-y-auto scrollbar-thin flex-1"></div>
+        </div>
+    </div>
+
+    <!-- 多篇论文对比弹窗 -->
+    <div id="compareModal" class="fixed inset-0 bg-black/50 hidden z-50 flex items-center justify-center">
+        <div class="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div class="p-5 border-b flex justify-between items-center">
+                <h3 class="font-semibold text-lg">多论文对比分析</h3>
+                <button id="closeCompareModal" class="text-gray-500 text-xl"><i class="fa fa-times"></i></button>
+            </div>
+            <div id="compareContent" class="p-5 overflow-y-auto scrollbar-thin flex-1 whitespace-pre-wrap"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:8000/api';
+        // DOM
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const selectFilesBtn = document.getElementById('selectFilesBtn');
+        const uploadProgress = document.getElementById('uploadProgress');
+        const uploadFileName = document.getElementById('uploadFileName');
+        const uploadPercent = document.getElementById('uploadPercent');
+        const progressBar = document.getElementById('progressBar');
+        const progressSpinner = document.getElementById('progressSpinner');
+        const progressHint = document.getElementById('progressHint');
+        const uploadStatus = document.getElementById('uploadStatus');
+        const statusMessage = document.getElementById('statusMessage');
+        const documentList = document.getElementById('documentList');
+        const totalDocs = document.getElementById('totalDocs');
+        const successDocs = document.getElementById('successDocs');
+        const failedDocs = document.getElementById('failedDocs');
+        const refreshBtn = document.getElementById('refreshBtn');
+        const detailModal = document.getElementById('detailModal');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalContent = document.getElementById('modalContent');
+        const closeModalBtn = document.getElementById('closeModalBtn');
+
+        // 知识库DOM
+        const kbDocumentCount = document.getElementById('kbDocumentCount');
+        const kbChunkCount = document.getElementById('kbChunkCount');
+        const kbEmbeddingDim = document.getElementById('kbEmbeddingDim');
+        const refreshKBStatsBtn = document.getElementById('refreshKBStatsBtn');
+        const clearKBBtn = document.getElementById('clearKBBtn');
+        const searchQuery = document.getElementById('searchQuery');
+        const searchBtn = document.getElementById('searchBtn');
+        const searchResults = document.getElementById('searchResults');
+
+        // RAG问答DOM
+        const chatBox = document.getElementById('chatBox');
+        const qaInput = document.getElementById('qaInput');
+        const sendQaBtn = document.getElementById('sendQaBtn');
+
+        // 对比相关
+        const startCompareBtn = document.getElementById('startCompareBtn');
+        const selectCount = document.getElementById('selectCount');
+        const compareModal = document.getElementById('compareModal');
+        const closeCompareModal = document.getElementById('closeCompareModal');
+        const compareContent = document.getElementById('compareContent');
+
+        let documents = [];
+        let selectedIds = []; // 存放勾选对比的docID
+        let chatHistory = []; // 存放对话历史，支持多轮对话
+
+        // 聊天框自动滚动控制变量
+        let autoScrollEnabled = true; // 默认启用自动滚动
+        let userScrolledUp = false;   // 标记用户是否手动上滚
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDocuments();
+            loadKBStats();
+            bindEvents();
+            setupChatScrollBehavior(); // 初始化聊天框滚动行为
+        })
+
+        function bindEvents() {
+            // 上传拖拽
+            dropZone.ondragover = e => {e.preventDefault(); dropZone.classList.add('drop-zone-active')};
+            dropZone.ondragleave = ()=>dropZone.classList.remove('drop-zone-active');
+            dropZone.ondrop = e=>{
+                e.preventDefault();dropZone.classList.remove('drop-zone-active');
+                if(e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+            }
+            selectFilesBtn.onclick = ()=>fileInput.click();
+            fileInput.onchange = ()=>fileInput.files.length && uploadFiles(fileInput.files);
+            // 【刷新文献+loading】
+            refreshBtn.onclick = async function(){
+                setBtnLoading(refreshBtn,true);
+                await loadDocuments();
+                setBtnLoading(refreshBtn,false);
+            };
+            closeModalBtn.onclick = ()=>detailModal.classList.add('hidden');
+            detailModal.onclick = e=>e.target===detailModal&&detailModal.classList.add('hidden');
+
+            // 知识库
+            refreshKBStatsBtn.onclick = async function(){
+                setBtnLoading(refreshKBStatsBtn,true);
+                await loadKBStats();
+                setBtnLoading(refreshKBStatsBtn,false);
+            };
+            clearKBBtn.onclick = clearKnowledgeBase;
+            searchBtn.onclick = performSearch;
+            searchQuery.addEventListener('keypress', function(e) {
+                if(e.key === 'Enter') {
+                    e.preventDefault();
+                    performSearch();
+                }
+            });
+
+            // RAG问答
+            sendQaBtn.onclick = sendQA;
+            qaInput.addEventListener('keypress', function(e) {
+                if(e.key === 'Enter') {
+                    e.preventDefault();
+                    sendQA();
+                }
+            });
+
+            // 对比弹窗
+            startCompareBtn.onclick = runCompare;
+            closeCompareModal.onclick = ()=>compareModal.classList.add('hidden');
+            compareModal.onclick = e=>e.target===compareModal&&compareModal.classList.add('hidden');
+        }
+
+        // ==========聊天框滚动行为设置==========
+        function setupChatScrollBehavior() {
+            // 监听滚动事件，判断用户是否手动上滚
+            chatBox.addEventListener('scroll', () => {
+                // 计算滚动位置是否接近底部（阈值：20px）
+                const isNearBottom = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight <= 20;
+
+                if (isNearBottom) {
+                    // 接近底部时，自动滚动功能保持启用
+                    userScrolledUp = false;
+                    autoScrollEnabled = true;
+                } else if (autoScrollEnabled) {
+                    // 用户主动上滚超过阈值，暂时禁用自动滚动
+                    userScrolledUp = true;
+                    autoScrollEnabled = false;
+                }
+            });
+
+            // 初始化时滚动到底部
+            scrollChatToBottom();
+        }
+
+        // 滚动聊天框到底部的函数
+        function scrollChatToBottom(smooth = false) {
+            if (!autoScrollEnabled && userScrolledUp) return; // 用户手动上滚时不自动滚动
+
+            requestAnimationFrame(() => {
+                if (smooth) {
+                    chatBox.scrollTo({
+                        top: chatBox.scrollHeight,
+                        behavior: 'smooth'
+                    });
+                } else {
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                }
+            });
+        }
+
+        // 恢复自动滚动（用户手动回到底部时调用）
+        function restoreAutoScroll() {
+            autoScrollEnabled = true;
+            userScrolledUp = false;
+            scrollChatToBottom();
+        }
+
+        // ==========通用按钮loading封装：解决点击无反馈问题==========
+        function setBtnLoading(btnEl,isLoading){
+            const originHtml = btnEl.dataset.originHtml || btnEl.innerHTML;
+            if(isLoading){
+                btnEl.dataset.originHtml = originHtml;
+                btnEl.disabled = true;
+                btnEl.innerHTML = '<i class="fa fa-spinner fa-spin-fast mr-1"></i>处理中';
+                btnEl.classList.add('opacity-70');
+            }else{
+                btnEl.disabled = false;
+                btnEl.innerHTML = originHtml;
+                btnEl.classList.remove('opacity-70');
+            }
+        }
+
+        // 文件上传
+        async function uploadFiles(files) {
+            const pdf = Array.from(files).filter(f=>f.name.endsWith('.pdf')||f.type==='application/pdf');
+            if(!pdf.length) return showStatus('仅支持PDF文件','warning');
+            showStatus(`准备上传${pdf.length}个文件`,'info');
+            if(pdf.length===1) await uploadSingle(pdf[0]);
+            else await uploadBatch(pdf);
+            fileInput.value='';loadDocuments();
+        }
+        async function uploadSingle(file){
+            const fd=new FormData();fd.append('file',file);
+            showProgress(file.name,0);
+            try{
+                const res=await fetch(`${API_BASE_URL}/upload`,{method:'POST',body:fd});
+                if(!res.ok) throw await res.text();
+                await res.json();
+                showProgress(file.name,100);showStatus(`${file.name}解析成功`,'success');
+            }catch(err){showStatus(`失败:${err}`,'danger')}finally{hideProgress()}
+        }
+        async function uploadBatch(files){
+            const fd=new FormData();files.forEach(f=>fd.append('files',f));
+            showProgress('批量上传',0);
+            try{
+                const res=await fetch(`${API_BASE_URL}/batch-upload`,{method:'POST',body:fd});
+                const data=await res.json();
+                showProgress('完成',100);
+                showStatus(`成功${data.success}个,失败${data.failed}个`,'success');
+            }catch(err){showStatus(`批量异常${err}`,'danger')}finally{hideProgress()}
+        }
+
+        // 加载文献列表
+        async function loadDocuments(){
+            const res=await fetch(`${API_BASE_URL}/documents`);
+            documents=await res.json();
+            renderDocList();updateDocStat();
+        }
+        // 【中间文献条目优化：p3→p2.5，标题line-clamp-2防止超长撑宽】
+        function renderDocList(){
+            if(!documents.length){
+                documentList.innerHTML=`<div class="text-center text-gray-500 py-12"><i class="fa fa-file-text-o text-3xl mb-2 text-gray-400"></i><p>暂无文献</p></div>`;return;
+            }
+            documentList.innerHTML=documents.map(doc=>{
+                const isSel = selectedIds.includes(doc.document_id);
+                return `
+                <div class="border rounded-lg p-3 ${isSel?'selected-item':''}">
+                    <div class="flex justify-between items-start gap-2">
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2">
+                                <input type="checkbox" class="cmp-check" data-id="${doc.document_id}" ${isSel?'checked':''}>
+                                <h3 class="font-medium text-sm line-clamp-2 break-all">${doc.title||doc.file_name}</h3>
+                            </div>
+                            <p class="text-xs text-gray-500 mt-1 truncate">${doc.authors.length?doc.authors.join(','):'未知作者'}</p>
+                        </div>
+                    </div>
+                    <div class="flex gap-1.5 mt-2 flex-wrap">
+                        <button onclick="viewDocument('${doc.document_id}')" class="text-sm px-2.5 py-1 bg-primary/10 text-primary rounded">查看</button>
+                        <button onclick="addToKB('${doc.document_id}',this)" class="text-sm px-2.5 py-1 bg-success/10 text-success rounded">入库</button>
+                        <button onclick="singleSummary('${doc.document_id}',this)" class="text-sm px-2.5 py-1 bg-warning/10 text-warning rounded">论文精读</button>
+                        <button onclick="delDoc('${doc.document_id}',this)" class="text-sm px-2.5 py-1 bg-danger/10 text-danger rounded">删除</button>
+                    </div>
+                </div>`
+            }).join('');
+            // 绑定多选框
+            document.querySelectorAll('.cmp-check').forEach(ck=>{
+                ck.onchange = ()=>{
+                    const id=ck.dataset.id;
+                    if(ck.checked&&!selectedIds.includes(id)) selectedIds.push(id);
+                    else selectedIds=selectedIds.filter(i=>i!==id);
+                    selectCount.innerText=selectedIds.length;
+                    renderDocList();
+                }
+            })
+        }
+        function updateDocStat(){
+            totalDocs.innerText=documents.length;
+            successDocs.innerText=documents.filter(d=>d.processing_status==='success').length;
+            failedDocs.innerText=documents.filter(d=>d.processing_status==='failed').length;
+        }
+
+        // 查看详情
+        async function viewDocument(did){
+            const res=await fetch(`${API_BASE_URL}/documents/${did}`);
+            const d=await res.json();
+            modalTitle.innerText=d.title||d.file_name;
+            modalContent.innerHTML=`
+            <div class="space-y-5">
+                <div class="bg-gray-50 p-4 rounded">
+                    <p><span class="w-20 inline-block text-gray-500">文件名:</span>${d.file_name}</p>
+                    <p><span class="w-20 inline-block text-gray-500">作者:</span>${d.authors.length?d.authors.join(','):'无'}</p>
+                    <p><span class="w-20 inline-block text-gray-500">DOI:</span>${d.doi||'无'}</p>
+                    <p><span class="w-20 inline-block text-gray-500">关键词:</span>${d.keywords.length?d.keywords.join(','):'无'}</p>
+                </div>
+                <div><h4 class="font-medium mb-2">摘要</h4><div class="bg-gray-50 p-4 rounded text-sm">${d.abstract||'未提取'}</div></div>
+                <div><h4 class="font-medium mb-2">章节(${d.sections.length})</h4>${d.sections.map(s=>`<div class="border p-2 my-2 rounded"><b>${s.title}</b><p class="text-sm mt-1 line-clamp-3">${s.content.slice(0,300)}...</p></div>`).join('')}</div>
+                <div><h4 class="font-medium mb-2">全文预览</h4><div class="bg-gray-50 p-4 rounded text-sm">${d.full_text.slice(0,1800)}...</div></div>
+            </div>`;
+            detailModal.classList.remove('hidden');
+        }
+
+        // 入库知识库【带按钮loading】
+        async function addToKB(did,btn){
+            setBtnLoading(btn,true);
+            try{
+                const res=await fetch(`${API_BASE_URL}/knowledge-base/add/${did}`,{method:'POST'});
+                const d=await res.json();
+                showStatus(d.message,'success');loadKBStats();
+            }catch(e){showStatus(`入库失败:${e}`,'danger')}finally{
+                setBtnLoading(btn,false);
+            }
+        }
+        // 删除文献+知识库【带按钮loading】
+        async function delDoc(did,btn){
+            if(!confirm('确定删除？同步清除知识库数据')) return;
+            setBtnLoading(btn,true);
+            try{
+                await fetch(`${API_BASE_URL}/knowledge-base/documents/${did}`,{method:'DELETE'});
+                await fetch(`${API_BASE_URL}/documents/${did}`,{method:'DELETE'});
+                showStatus('删除成功','success');loadDocuments();loadKBStats();
+            }catch(e){showStatus(`删除失败${e}`,'danger')}finally{
+                setBtnLoading(btn,false);
+            }
+        }
+
+        // 知识库统计
+        async function loadKBStats(){
+            const res=await fetch(`${API_BASE_URL}/knowledge-base/stats`);
+            const d=await res.json();
+            kbDocumentCount.innerText=d.document_count;
+            kbChunkCount.innerText=d.chunk_count;
+            kbEmbeddingDim.innerText=d.embedding_dimension;
+        }
+        // 清空知识库loading
+        async function clearKnowledgeBase(){
+            if(!confirm('清空全部知识库？不可恢复')) return;
+            setBtnLoading(clearKBBtn,true);
+            try{
+                await fetch(`${API_BASE_URL}/knowledge-base/clear`,{method:'DELETE'});
+                showStatus('知识库已清空','success');loadKBStats();
+                searchResults.innerHTML=`<div class="text-center text-gray-500 py-6 text-sm">输入内容检索</div>`;
+            }catch(e){showStatus(`清空失败${e}`,'danger')}finally{
+                setBtnLoading(clearKBBtn,false);
+            }
+        }
+
+        // 知识库片段检索loading
+        async function performSearch(){
+            const q=searchQuery.value.trim();if(!q) return showStatus('输入检索词','warning');
+            setBtnLoading(searchBtn,true);
+            try{
+                const res=await fetch(`${API_BASE_URL}/knowledge-base/search`,{
+                    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q,top_k:5})
+                });
+                const data=await res.json();
+                if(!data.results.length){
+                    searchResults.innerHTML=`<div class="text-center text-gray-500 py-6 text-gray-500">无匹配片段</div>`;return;
+                }
+                searchResults.innerHTML=data.results.map(r=>`
+                <div class="border rounded p-2 text-sm">
+                    <div class="flex justify-between"><span class="text-primary text-xs">相似度${(r.score*100).toFixed(1)}%</span><span class="text-xs text-gray-400 truncate">${r.file_name}</span></div>
+                    <p class="mt-1 line-clamp-3 text-gray-700">${r.content}</p>
+                    ${r.metadata.section_title?`<div class="text-xs text-gray-500 mt-1 truncate">章节:${r.metadata.section_title}</div>`:''}
+                </div>`).join('');
+            }catch(e){showStatus('检索异常','danger')}finally{
+                setBtnLoading(searchBtn,false);
+            }
+        }
+
+        // ========= RAG问答核心（支持多轮对话+发送loading） =========
+        async function sendQA(){
+            const q=qaInput.value.trim();if(!q) return;
+            setBtnLoading(sendQaBtn,true);
+            // 追加用户消息
+            chatBox.innerHTML+=`<div class="bg-usermsg p-2.5 rounded-lg"><span class="font-medium text-sm">你：</span><p class="text-sm mt-1">${q}</p></div>`;
+            qaInput.value='';
+            scrollChatToBottom(true); // 发送消息后平滑滚动到底部
+
+            try{
+                // 构建请求，包含对话历史
+                const requestBody = {
+                    query: q,
+                    chat_history: chatHistory,
+                    use_memory: true
+                };
+
+                const res=await fetch(`${API_BASE_URL}/qa/ask`,{
+                    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(requestBody)
+                });
+                const d=await res.json();
+
+                // 更新对话历史
+                chatHistory.push({role: 'user', content: q});
+                chatHistory.push({role: 'assistant', content: d.answer});
+
+                // 限制对话历史长度（保留最近5轮）
+                if (chatHistory.length > 10) {
+                    chatHistory = chatHistory.slice(-10);
+                }
+
+                // 显示回答
+                const typeLabel = d.question_type === 'chat' ? '闲聊' :
+                                  d.question_type === 'knowledge_with_retrieval' ? '知识库检索' :
+                                  d.question_type === 'knowledge_internal' ? '内置知识' : '无法回答';
+
+                chatBox.innerHTML+=`<div class="bg-llmmsg p-2.5 rounded-lg">
+                    <div class="flex justify-between items-center">
+                        <span class="font-medium text-sm">DeepSeek：</span>
+                        <span class="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600">${typeLabel}</span>
+                    </div>
+                    <div class="text-sm mt-1 whitespace-pre-wrap">${d.answer}</div>
+                    <div class="mt-2 text-xs text-gray-500">检索${d.retrieval_count}条文献片段 | 对话轮次：${Math.floor(chatHistory.length/2)}</div>
+                </div>`;
+
+                scrollChatToBottom(true); // 收到回答后平滑滚动到底部
+            }catch(err){
+                chatBox.innerHTML+=`<div class="bg-red-50 p-2.5 rounded-lg text-sm text-danger">请求异常：${err}</div>`;
+                scrollChatToBottom(true); // 异常信息也滚动到底部
+            }finally{
+                setBtnLoading(sendQaBtn,false);
+            }
+        }
+
+        // 清除对话历史
+        function clearChatHistory() {
+            chatHistory = [];
+            chatBox.innerHTML = '<div class="text-center text-gray-500 py-12 text-sm">对话已清除，开始新的对话</div>';
+            scrollChatToBottom(); // 清除后滚动到底部
+            restoreAutoScroll();  // 恢复自动滚动功能
+        }
+
+        // 单篇论文精读总结【按钮loading】
+        async function singleSummary(did,btn){
+            setBtnLoading(btn,true);
+            showStatus('正在生成论文精读...','info');
+            try{
+                const res=await fetch(`${API_BASE_URL}/qa/summarize`,{
+                    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({document_id:did})
+                });
+                const d=await res.json();
+                modalTitle.innerText='论文结构化精读';
+                modalContent.innerHTML=renderMarkdown(d.summary);
+                detailModal.classList.remove('hidden');
+                showStatus('精读生成完成','success');
+            }catch(e){showStatus(`精读失败${e}`,'danger')}finally{
+                setBtnLoading(btn,false);
+            }
+        }
+
+        // 多篇论文对比【按钮loading】
+        async function runCompare(){
+            if(selectedIds.length<2) return showStatus('至少勾选2篇文献','warning');
+            setBtnLoading(startCompareBtn,true);
+            compareContent.innerHTML='<div class="text-center text-gray-500 py-8">正在调用DeepSeek生成对比分析...</div>';
+            compareModal.classList.remove('hidden');
+            try{
+                const res=await fetch(`${API_BASE_URL}/qa/compare`,{
+                    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({document_ids:selectedIds})
+                });
+                const d=await res.json();
+                compareContent.innerHTML=renderMarkdown(d.comparison);
+            }catch(e){compareContent.innerHTML=`<div class="text-center text-red-500 py-8">对比异常：${e}</div>`;}finally{
+                setBtnLoading(startCompareBtn,false);
+            }
+        }
+
+        // Markdown渲染函数（美化版）
+        function renderMarkdown(text){
+            if(!text) return '<p class="text-gray-500 text-center py-8">无内容</p>';
+
+            let html = text;
+
+            // 处理标题
+            html = html.replace(/^### (.*$)/gim, '<h3 class="text-lg font-bold text-gray-800 mt-5 mb-3 flex items-center gap-2"><span class="w-1 h-5 bg-primary rounded"></span>$1</h3>');
+            html = html.replace(/^## (.*$)/gim, '<h2 class="text-xl font-bold text-gray-800 mt-7 mb-4 pb-2 border-b-2 border-primary/30">$1</h2>');
+            html = html.replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold text-gray-800 mt-8 mb-5 pb-3 border-b border-gray-300">$1</h1>');
+
+            // 处理粗体和斜体
+            html = html.replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-gray-800">$1</strong>');
+            html = html.replace(/\*(.*?)\*/g, '<em class="italic text-gray-700">$1</em>');
+
+            // 处理列表
+            html = html.replace(/^- (.*$)/gim, '<li class="ml-5 text-gray-700 py-0.5 flex items-start gap-2"><span class="w-1.5 h-1.5 bg-primary rounded-full mt-1.5 flex-shrink-0"></span>$1</li>');
+            html = html.replace(/(<li[^>]*>[\s\S]*?<\/li>)+/g, '<ul class="mb-4">$&</ul>');
+
+            // 处理数字列表
+            html = html.replace(/^(\d+)\. (.*$)/gim, '<li class="ml-5 text-gray-700 py-0.5">$1. $2</li>');
+
+            // 处理分隔线
+            html = html.replace(/^---$/gim, '<div class="my-6 flex items-center gap-4"><div class="flex-1 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent"></div><span class="text-primary/50 text-sm">---</span><div class="flex-1 h-px bg-gradient-to-l from-transparent via-primary/50 to-transparent"></div></div>');
+
+            // 处理段落
+            html = html.replace(/([^\n]+)\n\n/g, '<p class="text-gray-700 mb-4 leading-relaxed text-base">$1</p>');
+            html = html.replace(/([^\n]+)$/g, '<p class="text-gray-700 mb-4 leading-relaxed text-base">$1</p>');
+
+            // 处理代码（简化）
+            html = html.replace(/`([^`]+)`/g, '<code class="bg-gray-100 px-2 py-0.5 rounded text-sm font-mono text-blue-600">$1</code>');
+
+            // 处理空白行
+            html.replace(/^\s+$/gm, '');
+
+            // 处理特殊标记：对比小结
+            html = html.replace(/\*\*对比小结\*\*/g, '</div><div class="bg-gradient-to-r from-amber-50 to-orange-50 border-l-4 border-amber-400 p-4 rounded-r-lg my-4"><strong class="text-amber-800 font-bold">对比小结：</strong>');
+            html = html.replace(/\*\*论文(\d+)\*\*/g, '<span class="inline-block px-2.5 py-0.5 bg-primary/10 text-primary rounded-full text-sm font-semibold mr-2">论文$1</span>');
+
+            return `<div class="prose prose-sm max-w-none leading-relaxed">${html}</div>`;
+        }
+
+        // 进度&提示
+        function showProgress(name,pct){
+            uploadFileName.innerText=name;
+            uploadPercent.innerText=pct+'%';
+            progressBar.style.width=pct+'%';
+            uploadProgress.classList.remove('hidden');
+            
+            // 根据进度显示不同的提示信息
+            if (pct === 0) {
+                progressHint.innerText = '正在准备上传...';
+            } else if (pct < 50) {
+                progressHint.innerText = '正在上传文件...';
+            } else if (pct < 100) {
+                progressHint.innerText = '正在解析文档内容...';
+            } else {
+                progressHint.innerText = '处理完成！';
+                progressSpinner.className = 'fa fa-check-circle text-green-500 text-sm';
+            }
+        }
+        function hideProgress(){
+            uploadProgress.classList.add('hidden');
+            // 重置状态
+            progressSpinner.className = 'fa fa-spinner fa-spin-fast text-primary text-sm';
+            progressBar.style.width = '0%';
+        }
+        function showStatus(msg,type){
+            const map={success:'bg-green-50 text-green-800 border-green-200',danger:'bg-red-50 text-red-800 border-red-200',warning:'bg-yellow-50 text-yellow-800 border-yellow-200',info:'bg-blue-50 text-blue-800 border-blue-200'};
+            statusMessage.className=`p-2.5 rounded text-sm border ${map[type]}`;
+            statusMessage.innerText=msg;uploadStatus.classList.remove('hidden');
+            setTimeout(()=>uploadStatus.classList.add('hidden'),4500);
+        }
+    </script>
+</body>
+</html>
