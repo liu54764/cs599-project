@@ -6,10 +6,11 @@ os.environ["CHROMA_TELEMETRY_ENABLED"] = "false"
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
+import asyncio
+import json
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-import os
 import shutil
 from pathlib import Path
 
@@ -399,6 +400,50 @@ async def ask_question(request: QARequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+async def generate_stream(request: QARequest):
+    """生成流式响应的异步生成器"""
+    try:
+        history = None
+        if request.chat_history and request.use_memory:
+            history = []
+            for i in range(0, len(request.chat_history), 2):
+                if i + 1 < len(request.chat_history):
+                    user_msg = request.chat_history[i]
+                    ai_msg = request.chat_history[i + 1]
+                    if user_msg.role == "user" and ai_msg.role == "assistant":
+                        history.append((user_msg.content, ai_msg.content))
+        
+        for chunk in qa_engine.answer_question_stream(
+            query=request.query,
+            chat_history=history if history else None
+        ):
+            data = json.dumps(chunk, ensure_ascii=False)
+            yield f"data: {data}\n\n"
+            await asyncio.sleep(0)
+    except Exception as e:
+        error_data = json.dumps({
+            "chunk": f"错误: {str(e)}",
+            "is_finished": True,
+            "source_documents": [],
+            "retrieval_count": 0,
+            "question_type": "error"
+        }, ensure_ascii=False)
+        yield f"data: {error_data}\n\n"
+
+@app.post("/api/qa/ask/stream")
+async def ask_question_stream(request: QARequest):
+    """基于知识库RAG问答（流式输出），支持多轮对话记忆"""
+    return StreamingResponse(
+        generate_stream(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Content-Type": "text/event-stream; charset=utf-8"
+        }
+    )
 
 @app.post("/api/qa/summarize", response_model=PaperSummaryResponse)
 async def summarize_paper(req:PaperSummaryRequest):

@@ -1,5 +1,4 @@
-from typing import Optional, List, Dict, Any
-import json
+from typing import Optional, Generator
 import threading
 from .config import LLM_CONFIG
 
@@ -35,7 +34,7 @@ class LLMClient:
         elif self.provider == "openai":
             self._init_openai()
         elif self.provider == "deepseek":
-            self._init_deepseek()  # 新增DeepSeek初始化
+            self._init_deepseek()
         elif self.provider == "anthropic":
             self._init_anthropic()
         else:
@@ -49,7 +48,6 @@ class LLMClient:
             import ollama
             self.config = LLM_CONFIG["ollama"]
             self.client = ollama.Client(host=self.config["base_url"])
-            self._completion_fn = self._ollama_completion
         except ImportError:
             raise ImportError("请安装ollama库: pip install ollama")
 
@@ -62,7 +60,6 @@ class LLMClient:
                 api_key=self.config["api_key"],
                 base_url=self.config["base_url"]
             )
-            self._completion_fn = self._openai_completion
         except ImportError:
             raise ImportError("请安装openai库: pip install openai")
 
@@ -79,7 +76,6 @@ class LLMClient:
                 api_key=self.config["api_key"],
                 base_url=self.config["base_url"]
             )
-            self._completion_fn = self._openai_completion  # 复用OpenAI的调用方法
         except ImportError:
             raise ImportError("请安装openai库: pip install openai")
 
@@ -89,66 +85,89 @@ class LLMClient:
             from anthropic import Anthropic
             self.config = LLM_CONFIG["anthropic"]
             self.client = Anthropic(api_key=self.config["api_key"])
-            self._completion_fn = self._anthropic_completion
         except ImportError:
             raise ImportError("请安装anthropic库: pip install anthropic")
 
     def complete(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """
-        生成文本补全
-        Args:
-            prompt: 用户提示词
-            system_prompt: 系统提示词（可选）
-        Returns:
-            LLM生成的回答
-        """
-        return self._completion_fn(prompt, system_prompt)
-
-    def _ollama_completion(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """Ollama补全实现"""
+        """生成文本补全"""
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        response = self.client.chat(
-            model=self.config["model_name"],
-            messages=messages,
-            options={
-                "temperature": self.config["temperature"],
-                "num_predict": self.config["max_tokens"]
-            }
-        )
+        if self.provider == "ollama":
+            response = self.client.chat(
+                model=self.config["model_name"],
+                messages=messages,
+                options={
+                    "temperature": self.config["temperature"],
+                    "num_predict": self.config["max_tokens"]
+                }
+            )
+            return response["message"]["content"].strip()
+        elif self.provider in ["openai", "deepseek"]:
+            response = self.client.chat.completions.create(
+                model=self.config["model_name"],
+                messages=messages,
+                temperature=self.config["temperature"],
+                max_tokens=self.config["max_tokens"],
+                stream=False
+            )
+            return response.choices[0].message.content.strip()
+        elif self.provider == "anthropic":
+            response = self.client.messages.create(
+                model=self.config["model_name"],
+                system=system_prompt,
+                messages=messages,
+                temperature=self.config["temperature"],
+                max_tokens=self.config["max_tokens"]
+            )
+            return response.content[0].text.strip()
 
-        return response["message"]["content"].strip()
-
-    def _openai_completion(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """OpenAI/DeepSeek补全实现"""
+    def stream_complete(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+        """流式生成文本补全"""
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        response = self.client.chat.completions.create(
-            model=self.config["model_name"],
-            messages=messages,
-            temperature=self.config["temperature"],
-            max_tokens=self.config["max_tokens"],
-            stream=False
-        )
-
-        return response.choices[0].message.content.strip()
-
-    def _anthropic_completion(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """Anthropic补全实现"""
-        messages = [{"role": "user", "content": prompt}]
-
-        response = self.client.messages.create(
-            model=self.config["model_name"],
-            system=system_prompt,
-            messages=messages,
-            temperature=self.config["temperature"],
-            max_tokens=self.config["max_tokens"]
-        )
-
-        return response.content[0].text.strip()
+        if self.provider == "ollama":
+            response = self.client.chat(
+                model=self.config["model_name"],
+                messages=messages,
+                options={
+                    "temperature": self.config["temperature"],
+                    "num_predict": self.config["max_tokens"]
+                },
+                stream=True
+            )
+            for chunk in response:
+                content = chunk.get("message", {}).get("content", "")
+                if content:
+                    yield content
+        elif self.provider in ["openai", "deepseek"]:
+            response = self.client.chat.completions.create(
+                model=self.config["model_name"],
+                messages=messages,
+                temperature=self.config["temperature"],
+                max_tokens=self.config["max_tokens"],
+                stream=True
+            )
+            for chunk in response:
+                content = chunk.choices[0].delta.content
+                if content:
+                    yield content
+        elif self.provider == "anthropic":
+            response = self.client.messages.create(
+                model=self.config["model_name"],
+                system=system_prompt,
+                messages=messages,
+                temperature=self.config["temperature"],
+                max_tokens=self.config["max_tokens"],
+                stream=True
+            )
+            for chunk in response:
+                if chunk.type == "content_block_delta":
+                    content = chunk.delta.text
+                    if content:
+                        yield content

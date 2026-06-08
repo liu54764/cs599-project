@@ -520,57 +520,147 @@
             }
         }
 
-        // ========= RAG问答核心（支持多轮对话+发送loading） =========
+        // 全局变量用于跟踪当前流式请求
+        let currentStreamRequest = null;
+
+        // ========= RAG问答核心（支持多轮对话+流式输出） =========
         async function sendQA(){
             const q=qaInput.value.trim();if(!q) return;
             setBtnLoading(sendQaBtn,true);
+            
+            // 如果有正在进行的流式请求，取消它
+            if (currentStreamRequest) {
+                currentStreamRequest.abort();
+                currentStreamRequest = null;
+            }
+
             // 追加用户消息
             chatBox.innerHTML+=`<div class="bg-usermsg p-2.5 rounded-lg"><span class="font-medium text-sm">你：</span><p class="text-sm mt-1">${q}</p></div>`;
             qaInput.value='';
-            scrollChatToBottom(true); // 发送消息后平滑滚动到底部
+            scrollChatToBottom(true);
+
+            // 创建AI回复的容器
+            const answerId = 'answer-' + Date.now();
+            chatBox.innerHTML+=`<div id="${answerId}" class="bg-llmmsg p-2.5 rounded-lg">
+                <div class="flex justify-between items-center">
+                    <span class="font-medium text-sm">DeepSeek：</span>
+                    <span class="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600">
+                        <i class="fa fa-spinner fa-spin-fast mr-1"></i>生成中...
+                    </span>
+                </div>
+                <div id="${answerId}-content" class="text-sm mt-1 whitespace-pre-wrap"></div>
+                <div id="${answerId}-meta" class="mt-2 text-xs text-gray-500"></div>
+            </div>`;
+
+            scrollChatToBottom(true);
+
+            // 创建AbortController用于取消请求
+            const abortController = new AbortController();
+            currentStreamRequest = abortController;
 
             try{
-                // 构建请求，包含对话历史
                 const requestBody = {
                     query: q,
                     chat_history: chatHistory,
                     use_memory: true
                 };
 
-                const res=await fetch(`${API_BASE_URL}/qa/ask`,{
-                    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(requestBody)
+                const res = await fetch(`${API_BASE_URL}/qa/ask/stream`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(requestBody),
+                    signal: abortController.signal
                 });
-                const d=await res.json();
+
+                if (!res.ok) {
+                    throw new Error('请求失败');
+                }
+
+                // 处理流式响应
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let fullAnswer = '';
+                let sourceDocuments = [];
+                let retrievalCount = 0;
+                let questionType = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(5));
+                                
+                                if (data.is_finished) {
+                                    // 最后一块，包含元数据
+                                    sourceDocuments = data.source_documents || [];
+                                    retrievalCount = data.retrieval_count || 0;
+                                    questionType = data.question_type || '';
+                                } else if (data.chunk) {
+                                    // 内容块
+                                    fullAnswer += data.chunk;
+                                    updateAnswerContent(answerId, fullAnswer);
+                                    scrollChatToBottom();
+                                }
+                            } catch (e) {
+                                console.error('解析流式数据失败:', e);
+                            }
+                        }
+                    }
+                }
 
                 // 更新对话历史
                 chatHistory.push({role: 'user', content: q});
-                chatHistory.push({role: 'assistant', content: d.answer});
+                chatHistory.push({role: 'assistant', content: fullAnswer});
 
                 // 限制对话历史长度（保留最近5轮）
                 if (chatHistory.length > 10) {
                     chatHistory = chatHistory.slice(-10);
                 }
 
-                // 显示回答
-                const typeLabel = d.question_type === 'chat' ? '闲聊' :
-                                  d.question_type === 'knowledge_with_retrieval' ? '知识库检索' :
-                                  d.question_type === 'knowledge_internal' ? '内置知识' : '无法回答';
+                // 更新UI显示
+                updateAnswerMeta(answerId, questionType, retrievalCount);
 
-                chatBox.innerHTML+=`<div class="bg-llmmsg p-2.5 rounded-lg">
-                    <div class="flex justify-between items-center">
-                        <span class="font-medium text-sm">DeepSeek：</span>
-                        <span class="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600">${typeLabel}</span>
-                    </div>
-                    <div class="text-sm mt-1 whitespace-pre-wrap">${d.answer}</div>
-                    <div class="mt-2 text-xs text-gray-500">检索${d.retrieval_count}条文献片段 | 对话轮次：${Math.floor(chatHistory.length/2)}</div>
-                </div>`;
-
-                scrollChatToBottom(true); // 收到回答后平滑滚动到底部
             }catch(err){
-                chatBox.innerHTML+=`<div class="bg-red-50 p-2.5 rounded-lg text-sm text-danger">请求异常：${err}</div>`;
-                scrollChatToBottom(true); // 异常信息也滚动到底部
+                if (err.name !== 'AbortError') {
+                    document.getElementById(answerId + '-content').innerHTML = `请求异常：${err.message}`;
+                    document.getElementById(answerId + '-meta').innerHTML = '';
+                }
             }finally{
+                currentStreamRequest = null;
                 setBtnLoading(sendQaBtn,false);
+            }
+        }
+
+        // 更新回答内容
+        function updateAnswerContent(answerId, content) {
+            const contentEl = document.getElementById(answerId + '-content');
+            if (contentEl) {
+                contentEl.innerHTML = content;
+            }
+        }
+
+        // 更新回答元数据
+        function updateAnswerMeta(answerId, questionType, retrievalCount) {
+            const typeLabel = questionType === 'chat' ? '闲聊' :
+                              questionType === 'knowledge_with_retrieval' ? '知识库检索' :
+                              questionType === 'knowledge_internal' ? '内置知识' : 
+                              questionType === 'knowledge_no_result' ? '无法回答' : '未知';
+
+            const statusEl = document.querySelector(`#${answerId} span.rounded`);
+            if (statusEl) {
+                statusEl.innerHTML = typeLabel;
+            }
+
+            const metaEl = document.getElementById(answerId + '-meta');
+            if (metaEl) {
+                metaEl.innerHTML = `检索${retrievalCount}条文献片段 | 对话轮次：${Math.floor(chatHistory.length/2)}`;
             }
         }
 

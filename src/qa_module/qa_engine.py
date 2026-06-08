@@ -9,8 +9,9 @@
 - QAEngine: 主问答引擎，整合检索和生成流程
 - 支持多轮对话记忆
 - 智能问题分类（闲聊/知识类）
+- 支持流式输出
 """
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Generator
 import threading
 from .config import QA_CONFIG
 from .llm_client import LLMClient
@@ -122,6 +123,134 @@ class QAEngine:
 
         # 自研模式（基础逻辑）
         return self._answer_with_basic_logic(query, chat_history)
+
+    def answer_question_stream(self, query: str, chat_history: List = None) -> Generator[Dict[str, Any], None, None]:
+        """
+        流式回答用户的自然语言问题，支持多轮对话记忆
+
+        Args:
+            query: 用户问题
+            chat_history: 对话历史，格式为 [(question1, answer1), (question2, answer2)]
+        Yields:
+            字典，包含流式回答块和来源信息
+        """
+        # 构建上下文感知的查询
+        context_aware_query = self._build_context_aware_query(query, chat_history)
+
+        # 判断问题类型（优先使用多Agent分类器）
+        if MULTI_AGENT_AVAILABLE:
+            try:
+                classifier = MultiAgentQuestionClassifier()
+                classification_result = classifier.classify(context_aware_query, chat_history)
+                question_type = classification_result["classification"]
+
+                if classification_result.get("final_answer"):
+                    for chunk in self._stream_text(classification_result["final_answer"]):
+                        yield {"chunk": chunk, "is_finished": False}
+                    yield {
+                        "chunk": "",
+                        "is_finished": True,
+                        "source_documents": classification_result.get("retrieval_results", []),
+                        "retrieval_count": len(classification_result.get("retrieval_results", [])),
+                        "question_type": question_type
+                    }
+                    return
+            except Exception:
+                question_type = QuestionClassifier.classify(context_aware_query)
+        else:
+            question_type = QuestionClassifier.classify(context_aware_query)
+
+        # 闲聊类问题，直接用LLM回答
+        if question_type == 'chat':
+            prompt = self._build_chat_prompt(query, chat_history)
+            for chunk in self.llm_client.stream_complete(
+                prompt=prompt,
+                system_prompt="""你是一个友好的聊天助手，擅长进行自然、有趣的对话。请用中文回答，保持口语化和亲切感。"""
+            ):
+                yield {"chunk": chunk, "is_finished": False}
+            yield {
+                "chunk": "",
+                "is_finished": True,
+                "source_documents": [],
+                "retrieval_count": 0,
+                "question_type": "chat"
+            }
+            return
+
+        # 知识类问题，先检索知识库
+        retrieval_results = self.knowledge_manager.search_knowledge_base(
+            context_aware_query,
+            top_k=self.config["retrieval_top_k"]
+        )
+
+        if retrieval_results:
+            context_documents = self._process_retrieval_results(retrieval_results)
+            prompt = build_qa_prompt(query, context_documents, chat_history)
+
+            for chunk in self.llm_client.stream_complete(
+                prompt=prompt,
+                system_prompt=ACADEMIC_QA_SYSTEM_PROMPT
+            ):
+                yield {"chunk": chunk, "is_finished": False}
+
+            yield {
+                "chunk": "",
+                "is_finished": True,
+                "source_documents": context_documents,
+                "retrieval_count": len(retrieval_results),
+                "question_type": "knowledge_with_retrieval"
+            }
+        else:
+            # 无检索结果，使用LLM内置知识回答
+            prompt = self._build_internal_knowledge_prompt(query, chat_history)
+            full_answer = ""
+
+            for chunk in self.llm_client.stream_complete(
+                prompt=prompt,
+                system_prompt="""你是一位知识渊博的助手。请基于你的内置知识回答用户的问题。"""
+            ):
+                full_answer += chunk
+                yield {"chunk": chunk, "is_finished": False}
+
+            if "无法回答" in full_answer or "不知道" in full_answer or "抱歉" in full_answer:
+                question_type = "knowledge_no_result"
+            else:
+                question_type = "knowledge_internal"
+
+            yield {
+                "chunk": "",
+                "is_finished": True,
+                "source_documents": [],
+                "retrieval_count": 0,
+                "question_type": question_type
+            }
+
+    def _stream_text(self, text: str, chunk_size: int = 50) -> Generator[str, None, None]:
+        """将文本按块流式输出"""
+        for i in range(0, len(text), chunk_size):
+            yield text[i:i + chunk_size]
+
+    def _build_chat_prompt(self, query: str, chat_history: List = None) -> str:
+        """构建闲聊提示词"""
+        history_context = ""
+        if chat_history and len(chat_history) > 0:
+            history_context = "对话历史（按时间顺序）：\n"
+            for idx, (q, a) in enumerate(chat_history[-5:], 1):
+                history_context += f"[{idx}] 用户：{q}\n"
+                history_context += f"     助手：{a}\n"
+            history_context += "\n"
+
+        return f"""{history_context}请基于上述对话历史，回答用户当前的问题：\n\n用户问题：{query}\n\n重要提示：1. 如果用户的问题涉及之前对话中提到的内容，请仔细查看对话历史并引用正确的信息。2. 回答要准确、自然，符合上下文。"""
+
+    def _build_internal_knowledge_prompt(self, query: str, chat_history: List = None) -> str:
+        """构建内置知识回答提示词"""
+        history_context = ""
+        if chat_history and len(chat_history) > 0:
+            history_context = "\n\n对话历史：\n"
+            for q, a in chat_history[-3:]:
+                history_context += f"用户：{q}\n助手：{a}\n"
+
+        return f"""{history_context}知识库中未检索到与当前问题直接相关的文献内容，将基于内置知识回答。\n\n用户问题：{query}\n\n如果你的知识中也没有相关信息，请直接说："抱歉，我无法回答这个问题。"不要编造信息，不要猜测，保持回答真实可靠。"""
 
     def _answer_with_langchain(self, query: str, chat_history: List = None) -> Dict[str, Any]:
         """使用 LangChain 引擎回答问题"""
