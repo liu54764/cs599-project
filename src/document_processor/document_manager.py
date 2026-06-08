@@ -119,6 +119,27 @@ class DocumentManager:
             return True
         return False
 
+    def rename_document(self, document_id: str, new_file_name: str) -> Optional[ProcessedDocument]:
+        """重命名文献"""
+        doc = self.processed_documents.get(document_id)
+        if not doc:
+            return None
+        
+        # 重命名 PDF 文件
+        old_file_path = Path(doc.file_path)
+        if old_file_path.exists():
+            new_file_path = old_file_path.parent / new_file_name
+            os.rename(old_file_path, new_file_path)
+            doc.file_path = str(new_file_path)
+        
+        # 更新文件名
+        doc.file_name = new_file_name
+        
+        # 保存更新后的元数据
+        self._save_document_metadata(doc)
+        
+        return doc
+
     def _save_document_metadata(self, doc: ProcessedDocument) -> None:
         """将文献元数据和处理结果保存到磁盘"""
         metadata_file = self.metadata_dir / f"{doc.document_id}.json"

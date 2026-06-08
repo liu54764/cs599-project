@@ -82,7 +82,7 @@
                         <div class="w-full bg-gray-100 rounded-full h-2 shadow-inner">
                             <div id="progressBar" class="h-2 rounded-full bg-gradient-to-r from-primary to-blue-400 transition-all duration-300 ease-out shadow-md" style="width:0%"></div>
                         </div>
-                        <!-- <div id="progressHint" class="text-xs text-gray-500 mt-1 text-center">正在解析文档...</div> -->
+                        <div id="progressHint" class="text-xs text-gray-500 mt-1 text-center">正在准备上传...</div>
                     </div>
                     <div id="uploadStatus" class="mt-1.5 hidden"><div id="statusMessage" class="p-1.5 rounded text-xs border"></div></div>
                 </div>
@@ -172,6 +172,30 @@
         </div>
     </div>
 
+    <!-- 重命名弹窗 -->
+    <div id="renameModal" class="fixed inset-0 bg-black/50 hidden z-50 flex items-center justify-center">
+        <div class="bg-white rounded-xl w-full max-w-md overflow-hidden">
+            <div class="p-5 border-b flex justify-between items-center">
+                <h3 class="font-semibold text-lg">重命名文件</h3>
+                <button id="closeRenameBtn" class="text-gray-500 text-xl"><i class="fa fa-times"></i></button>
+            </div>
+            <div class="p-5">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">新文件名</label>
+                    <div class="flex items-center gap-2">
+                        <input type="text" id="renameInput" class="flex-1 border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-primary" placeholder="输入新文件名">
+                        <span class="text-gray-500 font-medium">.pdf</span>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-2">.pdf 后缀会自动保留</p>
+                </div>
+                <div class="flex justify-end gap-2">
+                    <button id="cancelRenameBtn" class="px-4 py-2 border rounded-lg text-gray-600 hover:bg-gray-50">取消</button>
+                    <button id="confirmRenameBtn" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90">确认</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 多篇论文对比弹窗 -->
     <div id="compareModal" class="fixed inset-0 bg-black/50 hidden z-50 flex items-center justify-center">
         <div class="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
@@ -206,6 +230,14 @@
         const modalTitle = document.getElementById('modalTitle');
         const modalContent = document.getElementById('modalContent');
         const closeModalBtn = document.getElementById('closeModalBtn');
+        
+        // 重命名弹窗DOM
+        const renameModal = document.getElementById('renameModal');
+        const renameInput = document.getElementById('renameInput');
+        const closeRenameBtn = document.getElementById('closeRenameBtn');
+        const cancelRenameBtn = document.getElementById('cancelRenameBtn');
+        const confirmRenameBtn = document.getElementById('confirmRenameBtn');
+        let currentRenameDocId = null;
 
         // 知识库DOM
         const kbDocumentCount = document.getElementById('kbDocumentCount');
@@ -262,6 +294,18 @@
             };
             closeModalBtn.onclick = ()=>detailModal.classList.add('hidden');
             detailModal.onclick = e=>e.target===detailModal&&detailModal.classList.add('hidden');
+            
+            // 重命名弹窗事件
+            closeRenameBtn.onclick = ()=>renameModal.classList.add('hidden');
+            cancelRenameBtn.onclick = ()=>renameModal.classList.add('hidden');
+            renameModal.onclick = e=>e.target===renameModal&&renameModal.classList.add('hidden');
+            confirmRenameBtn.onclick = confirmRename;
+            renameInput.addEventListener('keypress', function(e) {
+                if(e.key === 'Enter') {
+                    e.preventDefault();
+                    confirmRename();
+                }
+            });
 
             // 知识库
             refreshKBStatsBtn.onclick = async function(){
@@ -402,13 +446,14 @@
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center gap-2">
                                 <input type="checkbox" class="cmp-check" data-id="${doc.document_id}" ${isSel?'checked':''}>
-                                <h3 class="font-medium text-sm line-clamp-2 break-all">${doc.title||doc.file_name}</h3>
+                                <h3 class="font-medium text-sm line-clamp-2 break-all">${doc.file_name}</h3>
                             </div>
                             <p class="text-xs text-gray-500 mt-1 truncate">${doc.authors.length?doc.authors.join(','):'未知作者'}</p>
                         </div>
                     </div>
                     <div class="flex gap-1.5 mt-2 flex-wrap">
                         <button onclick="viewDocument('${doc.document_id}')" class="text-sm px-2.5 py-1 bg-primary/10 text-primary rounded">查看</button>
+                        <button onclick="renameDocument('${doc.document_id}','${doc.file_name}')" class="text-sm px-2.5 py-1 bg-secondary/10 text-secondary rounded">重命名</button>
                         <button onclick="addToKB('${doc.document_id}',this)" class="text-sm px-2.5 py-1 bg-success/10 text-success rounded">入库</button>
                         <button onclick="singleSummary('${doc.document_id}',this)" class="text-sm px-2.5 py-1 bg-warning/10 text-warning rounded">论文精读</button>
                         <button onclick="delDoc('${doc.document_id}',this)" class="text-sm px-2.5 py-1 bg-danger/10 text-danger rounded">删除</button>
@@ -432,11 +477,52 @@
             failedDocs.innerText=documents.filter(d=>d.processing_status==='failed').length;
         }
 
+        // 重命名文档
+        async function renameDocument(did, fileName){
+            currentRenameDocId = did;
+            // 去掉 .pdf 后缀，显示在输入框中
+            const nameWithoutExt = fileName.replace(/\.pdf$/i, '');
+            renameInput.value = nameWithoutExt;
+            renameModal.classList.remove('hidden');
+            renameInput.focus();
+        }
+        
+        // 确认重命名
+        async function confirmRename(){
+            const newName = renameInput.value.trim();
+            if(!newName){
+                showStatus('文件名不能为空', 'warning');
+                return;
+            }
+            
+            setBtnLoading(confirmRenameBtn, true);
+            try{
+                const res = await fetch(`${API_BASE_URL}/documents/${currentRenameDocId}/rename`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ new_file_name: newName })
+                });
+                
+                if(!res.ok) throw await res.text();
+                
+                const result = await res.json();
+                showStatus(result.message, 'success');
+                
+                // 关闭弹窗并刷新列表
+                renameModal.classList.add('hidden');
+                await loadDocuments();
+            }catch(e){
+                showStatus(`重命名失败: ${e}`, 'danger');
+            }finally{
+                setBtnLoading(confirmRenameBtn, false);
+            }
+        }
+
         // 查看详情
         async function viewDocument(did){
             const res=await fetch(`${API_BASE_URL}/documents/${did}`);
             const d=await res.json();
-            modalTitle.innerText=d.title||d.file_name;
+            modalTitle.innerText=d.file_name;
             modalContent.innerHTML=`
             <div class="space-y-5">
                 <div class="bg-gray-50 p-4 rounded">

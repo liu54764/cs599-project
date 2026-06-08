@@ -343,6 +343,37 @@ async def search_knowledge_base(request: SearchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class RenameFileRequest(BaseModel):
+    new_file_name: str
+
+
+@app.put("/api/documents/{document_id}/rename", response_model=UploadResponse)
+async def rename_document(document_id: str, request: RenameFileRequest):
+    """修改文献文件名"""
+    doc = doc_manager.get_document(document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="文献不存在")
+    
+    try:
+        new_file_name = request.new_file_name.strip()
+        if not new_file_name:
+            raise HTTPException(status_code=400, detail="文件名不能为空")
+        
+        # 确保文件名以 .pdf 结尾
+        if not new_file_name.lower().endswith('.pdf'):
+            new_file_name = new_file_name + '.pdf'
+        
+        # 重命名文档
+        doc = doc_manager.rename_document(document_id, new_file_name)
+        return UploadResponse(
+            success=True,
+            message=f"文件名已修改为: {doc.file_name}",
+            document=doc_to_info(doc)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.delete("/api/knowledge-base/documents/{document_id}")
 async def remove_document_from_kb(document_id: str):
     """从知识库中删除指定文献"""
