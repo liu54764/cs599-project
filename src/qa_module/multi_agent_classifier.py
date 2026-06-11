@@ -19,6 +19,45 @@ from knowledge_base import KnowledgeManager
 from .llm_client import LLMClient
 
 
+# 分类配置常量（提取为配置，便于维护和扩展）
+CLASSIFICATION_CONFIG = {
+    "technical_keywords": [
+        "python", "java", "javascript", "sql", "database",
+        "mongodb", "mysql", "redis", "algorithm", "code",
+        "编程", "开发", "实现", "架构", "设计", "框架",
+        "函数", "方法", "类", "接口", "API", "代码",
+        "调试", "错误", "bug", "性能", "优化", "部署"
+    ],
+    "creative_keywords": [
+        "写", "创作", "设计", "故事", "诗歌", "文案",
+        "策划", "方案", "创意", "灵感", "生成", "编",
+        "描述", "构思", "想象", "文案", "标题", "摘要"
+    ],
+    "knowledge_keywords": [
+        "什么是", "是什么", "定义", "原理", "如何", "区别",
+        "为什么", "解释", "说明", "介绍", "含义", "意思",
+        "作用", "用途", "特点", "优势", "劣势", "比较"
+    ],
+    "chat_keywords": [
+        "你好", "嗨", "天气", "心情", "谢谢", "再见",
+        "你是谁", "你叫什么", "你能", "帮我", "我想",
+        "今天", "现在", "最近", "感觉", "觉得", "开心"
+    ],
+    "priority": ["chat", "technical", "creative", "knowledge"]  # 分类优先级
+}
+
+
+def get_category_name(category: str) -> str:
+    """获取分类的中文名称"""
+    names = {
+        "chat": "闲聊",
+        "knowledge": "知识",
+        "technical": "技术",
+        "creative": "创意"
+    }
+    return names.get(category, category)
+
+
 class AgentState(TypedDict):
     """多Agent状态定义"""
     query: str
@@ -46,56 +85,56 @@ def classify_question(query: str, chat_history: str = "") -> str:
         - reason: 分类理由
         - needs_retrieval: 是否需要检索知识库
     """
-    # 使用现有的分类器作为基础
-    base_classification = QuestionClassifier.classify(query)
-
-    # 基于规则的增强分类
     query_lower = query.lower()
 
-    # 技术类问题关键词
-    tech_keywords = ["python", "java", "javascript", "sql", "database",
-                     "mongodb", "mysql", "redis", "algorithm", "code",
-                     "编程", "开发", "实现", "架构", "设计", "框架"]
+    # 统计每个类别的关键词匹配数
+    category_matches = {
+        "technical": sum(1 for kw in CLASSIFICATION_CONFIG["technical_keywords"] 
+                        if kw in query_lower),
+        "creative": sum(1 for kw in CLASSIFICATION_CONFIG["creative_keywords"] 
+                       if kw in query_lower),
+        "knowledge": sum(1 for kw in CLASSIFICATION_CONFIG["knowledge_keywords"] 
+                        if kw in query_lower),
+        "chat": sum(1 for kw in CLASSIFICATION_CONFIG["chat_keywords"] 
+                   if kw in query_lower)
+    }
 
-    # 创意类问题关键词
-    creative_keywords = ["写", "创作", "设计", "故事", "诗歌", "文案",
-                         "策划", "方案", "创意", "灵感"]
+    # 按优先级选择匹配数最多的类别
+    max_matches = -1
+    classification = "knowledge"  # 默认分类
+    reason = "默认分类"
 
-    classification = base_classification
-    reason = "基于关键词匹配"
-    needs_retrieval = classification == 'knowledge'
+    for category in CLASSIFICATION_CONFIG["priority"]:
+        if category_matches[category] > max_matches:
+            max_matches = category_matches[category]
+            classification = category
+            reason = f"检测到 {max_matches} 个{get_category_name(category)}关键词"
 
-    # 进一步细化分类
-    if any(keyword in query_lower for keyword in tech_keywords):
-        classification = 'technical'
-        reason = "检测到技术相关关键词"
-        needs_retrieval = True
-    elif any(keyword in query_lower for keyword in creative_keywords):
-        classification = 'creative'
-        reason = "检测到创意相关关键词"
-        needs_retrieval = False
+    # 计算置信度（基于匹配数量）
+    if max_matches == 0:
+        confidence = 0.5  # 默认置信度
+        reason = "未检测到明确关键词，使用默认分类"
+    elif max_matches == 1:
+        confidence = 0.65
+    elif max_matches == 2:
+        confidence = 0.8
+    else:
+        confidence = min(0.95, 0.8 + max_matches * 0.03)
 
-    # 计算置信度
-    confidence = 0.7  # 基础置信度
+    # 基于上下文的额外判断
+    if chat_history and classification == "chat":
+        # 如果有对话历史且分类为闲聊，提高置信度
+        confidence = min(0.95, confidence + 0.1)
+        reason += "，结合对话历史确认"
 
-    # 如果包含明确的知识类关键词，提高置信度
-    knowledge_keywords = ["什么是", "是什么", "定义", "原理", "如何", "区别"]
-    if any(keyword in query_lower for keyword in knowledge_keywords):
-        confidence = min(0.95, confidence + 0.2)
-
-    # 如果包含闲聊类关键词，调整分类
-    chat_keywords = ["你好", "嗨", "天气", "心情", "谢谢", "再见"]
-    if any(keyword in query_lower for keyword in chat_keywords):
-        classification = 'chat'
-        reason = "检测到闲聊关键词"
-        needs_retrieval = False
-        confidence = 0.9
+    needs_retrieval = classification in ['knowledge', 'technical']
 
     result = {
         "type": classification,
         "confidence": confidence,
         "reason": reason,
-        "needs_retrieval": needs_retrieval
+        "needs_retrieval": needs_retrieval,
+        "matches": category_matches  # 添加匹配详情便于调试
     }
 
     return json.dumps(result, ensure_ascii=False)

@@ -12,7 +12,7 @@
 
 - **AI IDE**: Trae CN
 - **LLM**: DeepSeek API
-- **框架**: LangGraph, LangChain
+- **框架**: LangGraph, LangChain (LCEL)
 - **嵌入模型**: sentence-transformers/all-MiniLM-L6-v2
 - **向量数据库**: ChromaDB
 - **后端框架**: FastAPI
@@ -40,7 +40,7 @@ cs599-project/
 │   │   ├── qa_engine.py          # 核心问答引擎
 │   │   ├── llm_client.py         # LLM客户端
 │   │   ├── prompt_templates.py   # 提示词模板
-│   │   └── langchain_qa_engine.py # LangChain问答集成
+│   │   └── lcel_qa_engine.py     # LCEL问答引擎（基于LangChain Expression Language）
 │   ├── frontend/              # 前端界面
 │   │   └── index.html            # 主界面文件
 │   ├── models/                # 模型文件
@@ -104,10 +104,12 @@ python main.py
 
 - ✅ PDF 文档批量上传与解析
 - ✅ 文档内容向量化存储（ChromaDB）
-- ✅ 基于语义相似度的文档检索
+- ✅ 基于语义相似度的文档检索（向量+BM25混合检索）
 - ✅ 支持多轮对话的 RAG 问答系统
 - ✅ 论文精读与摘要生成
 - ✅ 多文档对比分析
+- ✅ 流式输出（实时打字机效果）
+- ✅ 文件名重命名功能
 - ✅ 美观的 Web 界面
 
 ## 项目状态

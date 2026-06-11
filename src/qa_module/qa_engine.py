@@ -24,6 +24,14 @@ from .prompt_templates import (
 from .question_classifier import QuestionClassifier
 from knowledge_base import KnowledgeManager, RetrievalResult
 
+# 尝试导入 LCEL QA 引擎（最高优先级）
+try:
+    from .lcel_qa_engine import LCELQAEngine
+
+    LCEL_AVAILABLE = True
+except ImportError:
+    LCEL_AVAILABLE = False
+
 # 尝试导入 LangGraph 工作流
 try:
     from .langgraph_rag_workflow import LangGraphRAGWorkflow
@@ -31,14 +39,6 @@ try:
     LANGGRAPH_AVAILABLE = True
 except ImportError:
     LANGGRAPH_AVAILABLE = False
-
-# 尝试导入 LangChain QA 引擎
-try:
-    from .langchain_qa_engine import LangChainQAEngine
-
-    LANGCHAIN_AVAILABLE = True
-except ImportError:
-    LANGCHAIN_AVAILABLE = False
 
 # 尝试导入多Agent分类器
 try:
@@ -52,9 +52,9 @@ except ImportError:
 class QAEngine:
     """问答引擎核心，整合检索和生成流程
 
-    支持三种问答模式：
-    1. LangGraph 工作流模式（默认）：复杂工作流编排，支持条件分支和重试
-    2. LangChain 模式：标准的 RetrievalQA 链，支持对话记忆
+    支持三种问答模式（优先级从高到低）：
+    1. LCEL 模式（默认）：基于 LangChain Expression Language 的现代链式结构
+    2. LangGraph 工作流模式：复杂工作流编排，支持条件分支和重试
     3. 自研模式：基础的问答逻辑，作为回退方案
 
     使用单例模式确保全局只有一个实例
@@ -115,11 +115,11 @@ class QAEngine:
                 "confidence": float      # 回答置信度
             }
         """
-        # 优先级：LangGraph > LangChain > 自研
-        if use_langgraph and LANGGRAPH_AVAILABLE:
+        # 优先级：LCEL > LangGraph > 自研
+        if LCEL_AVAILABLE:
+            return self._answer_with_lcel(query, chat_history)
+        elif use_langgraph and LANGGRAPH_AVAILABLE:
             return self._answer_with_langgraph(query, chat_history)
-        elif use_langchain and LANGCHAIN_AVAILABLE:
-            return self._answer_with_langchain(query, chat_history)
 
         # 自研模式（基础逻辑）
         return self._answer_with_basic_logic(query, chat_history)
@@ -252,32 +252,36 @@ class QAEngine:
 
         return f"""{history_context}知识库中未检索到与当前问题直接相关的文献内容，将基于内置知识回答。\n\n用户问题：{query}\n\n如果你的知识中也没有相关信息，请直接说："抱歉，我无法回答这个问题。"不要编造信息，不要猜测，保持回答真实可靠。"""
 
-    def _answer_with_langchain(self, query: str, chat_history: List = None) -> Dict[str, Any]:
-        """使用 LangChain 引擎回答问题"""
-        if self.langchain_engine is None:
+    def _answer_with_lcel(self, query: str, chat_history: List = None) -> Dict[str, Any]:
+        """使用 LCEL 引擎回答问题（最高优先级）"""
+        if not hasattr(self, 'lcel_engine') or self.lcel_engine is None:
             try:
-                from .langchain_qa_engine import LangChainQAEngine
-                self.langchain_engine = LangChainQAEngine()
+                from .lcel_qa_engine import LCELQAEngine
+                self.lcel_engine = LCELQAEngine()
             except Exception as e:
-                print(f"LangChain引擎初始化失败，回退到基础模式: {e}")
+                print(f"LCEL引擎初始化失败，回退到LangGraph: {e}")
+                if LANGGRAPH_AVAILABLE:
+                    return self._answer_with_langgraph(query, chat_history)
                 return self._answer_with_basic_logic(query, chat_history)
 
         try:
             # 如果有对话历史，使用带记忆的问答
             if chat_history:
-                result = self.langchain_engine.answer_with_memory(query, chat_history)
+                result = self.lcel_engine.answer_with_memory(query, chat_history)
             else:
-                result = self.langchain_engine.answer_with_sources(query)
+                result = self.lcel_engine.answer_with_sources(query)
 
             return {
-                "answer": result.get("answer", result.get("result", "")),
+                "answer": result.get("answer", ""),
                 "source_documents": result.get("source_documents", []),
                 "retrieval_count": len(result.get("source_documents", [])),
-                "question_type": "knowledge_with_retrieval",
-                "confidence": 0.7
+                "question_type": result.get("question_type", "knowledge_with_retrieval"),
+                "confidence": 0.8
             }
         except Exception as e:
-            print(f"LangChain引擎执行失败，回退到基础模式: {e}")
+            print(f"LCEL引擎执行失败，回退到LangGraph: {e}")
+            if LANGGRAPH_AVAILABLE:
+                return self._answer_with_langgraph(query, chat_history)
             return self._answer_with_basic_logic(query, chat_history)
 
     def _answer_with_basic_logic(self, query: str, chat_history: List = None) -> Dict[str, Any]:
