@@ -1,6 +1,7 @@
 """基于 LangGraph 的 RAG 工作流编排"""
 from typing import List, Dict, Any, TypedDict, Optional
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 from .prompt_templates import build_qa_prompt, ACADEMIC_QA_SYSTEM_PROMPT
 from knowledge_base import KnowledgeManager
 from .question_classifier import QuestionClassifier
@@ -12,6 +13,7 @@ class RAGState(TypedDict):
     query: str
     question_type: str
     chat_history: List[tuple]
+    compressed_history: str
     retrieval_results: List[Dict[str, Any]]
     answer: str
     confidence: float
@@ -20,29 +22,33 @@ class RAGState(TypedDict):
 
 
 class LangGraphRAGWorkflow:
-    """基于 LangGraph 的 RAG 工作流"""
+    """基于 LangGraph 的 RAG 工作流，支持内置 Memory 和历史压缩"""
 
     def __init__(self):
         self.knowledge_manager = KnowledgeManager()
         self.llm_client = LLMClient()
+        self.memory = MemorySaver()
         self.workflow = self._build_workflow()
+        self.max_history_length = 10
+        self.compression_threshold = 5
 
     def _build_workflow(self):
         """构建 RAG 工作流图"""
         graph = StateGraph(RAGState)
 
-        # 添加节点
+        graph.add_node("compress_history", self._compress_history)
         graph.add_node("classify", self._classify_question)
         graph.add_node("retrieve", self._retrieve_knowledge)
         graph.add_node("generate_answer", self._generate_answer)
         graph.add_node("evaluate_answer", self._evaluate_answer)
         graph.add_node("summarize_chat", self._summarize_chat)
         graph.add_node("fallback_answer", self._fallback_answer)
+        graph.add_node("update_history", self._update_history)
 
-        # 添加边
-        graph.set_entry_point("classify")
+        graph.set_entry_point("compress_history")
 
-        # 分类 -> 检索（知识类）或总结回答（闲聊类）
+        graph.add_edge("compress_history", "classify")
+
         graph.add_conditional_edges(
             "classify",
             self._decide_next_step,
@@ -53,30 +59,64 @@ class LangGraphRAGWorkflow:
             }
         )
 
-        # 检索 -> 生成回答
         graph.add_edge("retrieve", "generate_answer")
 
-        # 生成回答 -> 评估
         graph.add_edge("generate_answer", "evaluate_answer")
 
-        # 评估 -> 条件分支
         graph.add_conditional_edges(
             "evaluate_answer",
             self._should_retry,
             {
                 "retry": "retrieve",
                 "fallback": "fallback_answer",
-                "finish": END
+                "finish": "update_history"
             }
         )
 
-        # 备用回答 -> 结束
-        graph.add_edge("fallback_answer", END)
+        graph.add_edge("fallback_answer", "update_history")
 
-        # 闲聊总结 -> 结束
-        graph.add_edge("summarize_chat", END)
+        graph.add_edge("summarize_chat", "update_history")
 
-        return graph.compile()
+        graph.add_edge("update_history", END)
+
+        return graph.compile(checkpointer=self.memory)
+
+    def _compress_history(self, state: RAGState) -> RAGState:
+        """压缩对话历史，当历史过长时进行总结"""
+        chat_history = state["chat_history"]
+        compressed_history = ""
+
+        if len(chat_history) >= self.compression_threshold:
+            history_to_compress = chat_history[:-2]
+            history_text = "\n".join([f"用户：{q}\n助手：{a}" for q, a in history_to_compress])
+            
+            prompt = f"""
+请对以下对话历史进行简洁总结：
+
+{history_text}
+
+总结要求：
+1. 提取关键信息和结论
+2. 保持对话主题和上下文
+3. 不要超过150字
+4. 用中文总结
+            """
+            
+            try:
+                compressed_history = self.llm_client.complete(
+                    prompt,
+                    system_prompt="你是一个专业的对话总结助手，请简洁地总结对话内容。"
+                )
+                compressed_history = compressed_history.strip()
+            except Exception as e:
+                print(f"历史压缩失败: {str(e)}")
+                compressed_history = ""
+
+        return {
+            **state,
+            "compressed_history": compressed_history,
+            "chat_history": chat_history[-self.max_history_length:]
+        }
 
     def _classify_question(self, state: RAGState) -> RAGState:
         """分类问题类型"""
@@ -98,7 +138,6 @@ class LangGraphRAGWorkflow:
         """检索知识库"""
         query = state["query"]
 
-        # 如果有对话历史，构建上下文感知查询
         if state["chat_history"]:
             last_q, _ = state["chat_history"][-1]
             enhanced_query = f"（上文：{last_q}）{query}"
@@ -130,9 +169,11 @@ class LangGraphRAGWorkflow:
         }
 
     def _generate_answer(self, state: RAGState) -> RAGState:
-        """生成回答（修复：移除多余的PromptTemplate + 统一使用提示词模板）"""
+        """生成回答"""
         query = state["query"]
         results = state["retrieval_results"]
+        chat_history = state["chat_history"]
+        compressed_history = state["compressed_history"]
 
         if not results:
             return {
@@ -142,13 +183,20 @@ class LangGraphRAGWorkflow:
                 "needs_retry": True
             }
 
-        # 统一使用prompt_templates.py中的build_qa_prompt函数
-        prompt = build_qa_prompt(query, results[:5], state["chat_history"])
+        full_history = chat_history
+        if compressed_history:
+            full_history = [(f"【对话总结】{compressed_history}", "")] + chat_history[-2:]
 
-        answer = self.llm_client.complete(
+        prompt = build_qa_prompt(query, results[:5], full_history)
+
+        answer_parts = []
+        for chunk in self.llm_client.stream_complete(
             prompt=prompt,
             system_prompt=ACADEMIC_QA_SYSTEM_PROMPT
-        )
+        ):
+            answer_parts.append(chunk)
+
+        answer = "".join(answer_parts)
 
         return {
             **state,
@@ -161,10 +209,8 @@ class LangGraphRAGWorkflow:
         if "未找到相关内容" in answer:
             return 0.2
 
-        # 根据检索结果数量和质量估算
         avg_score = sum(r["score"] for r in results) / len(results) if results else 0
 
-        # 如果回答引用了多个来源，置信度更高
         source_count = answer.count("文献")
 
         confidence = min(0.95, avg_score * 0.7 + source_count * 0.05 + 0.2)
@@ -195,12 +241,16 @@ class LangGraphRAGWorkflow:
     def _summarize_chat(self, state: RAGState) -> RAGState:
         """总结闲聊回答"""
         query = state["query"]
+        chat_history = state["chat_history"]
+        compressed_history = state["compressed_history"]
 
         history_context = ""
-        if state["chat_history"]:
-            history_context = "对话历史：\n"
-            for q, a in state["chat_history"][-3:]:
-                history_context += f"用户：{q}\n助手：{a}\n"
+        if compressed_history:
+            history_context = f"【对话总结】{compressed_history}\n"
+
+        recent_history = chat_history[-3:]
+        for q, a in recent_history:
+            history_context += f"用户：{q}\n助手：{a}\n"
 
         prompt = f"""
 {history_context}
@@ -249,15 +299,36 @@ class LangGraphRAGWorkflow:
             "needs_retry": False
         }
 
+    def _update_history(self, state: RAGState) -> RAGState:
+        """更新对话历史"""
+        new_history = state["chat_history"] + [(state["query"], state["answer"])]
+        new_history = new_history[-self.max_history_length:]
+
+        return {
+            **state,
+            "chat_history": new_history
+        }
+
     def run(self, query: str, chat_history: List[tuple] = None) -> Dict[str, Any]:
-        """运行 RAG 工作流"""
-        if chat_history is None:
-            chat_history = []
+        """运行 RAG 工作流，使用内置 Memory 管理对话状态"""
+        config = {"configurable": {"thread_id": "default_session"}}
+
+        try:
+            checkpoint = self.workflow.get_state(config)
+            existing_history = checkpoint.values.get("chat_history", [])
+            
+            if chat_history:
+                combined_history = existing_history + chat_history
+            else:
+                combined_history = existing_history
+        except Exception:
+            combined_history = chat_history if chat_history else []
 
         initial_state = {
             "query": query,
             "question_type": "",
-            "chat_history": chat_history,
+            "chat_history": combined_history,
+            "compressed_history": "",
             "retrieval_results": [],
             "answer": "",
             "confidence": 0.0,
@@ -265,7 +336,7 @@ class LangGraphRAGWorkflow:
             "retry_count": 0
         }
 
-        result = self.workflow.invoke(initial_state)
+        result = self.workflow.invoke(initial_state, config)
 
         return {
             "answer": result["answer"],
@@ -279,5 +350,71 @@ class LangGraphRAGWorkflow:
                     "score": r["score"]
                 }
                 for r in result["retrieval_results"]
-            ]
+            ],
+            "chat_history": result["chat_history"]
         }
+
+    def stream(self, query: str, chat_history: List[tuple] = None) -> Generator[Dict[str, Any], None, None]:
+        """流式运行 RAG 工作流，使用内置 Memory 管理对话状态"""
+        config = {"configurable": {"thread_id": "default_session"}}
+
+        try:
+            checkpoint = self.workflow.get_state(config)
+            existing_history = checkpoint.values.get("chat_history", [])
+            
+            if chat_history:
+                combined_history = existing_history + chat_history
+            else:
+                combined_history = existing_history
+        except Exception:
+            combined_history = chat_history if chat_history else []
+
+        initial_state = {
+            "query": query,
+            "question_type": "",
+            "chat_history": combined_history,
+            "compressed_history": "",
+            "retrieval_results": [],
+            "answer": "",
+            "confidence": 0.0,
+            "needs_retry": False,
+            "retry_count": 0
+        }
+
+        for event in self.workflow.stream(initial_state, config):
+            for node, values in event.items():
+                if node == "generate_answer" and "answer" in values:
+                    answer = values["answer"]
+                    if answer:
+                        yield {"type": "answer", "content": answer}
+                elif node == "_retrieve_knowledge" and "retrieval_results" in values:
+                    results = values["retrieval_results"]
+                    if results:
+                        yield {"type": "retrieval", "results": results}
+        
+        final_state = self.workflow.get_state(config).values
+        yield {
+            "type": "finished",
+            "answer": final_state.get("answer", ""),
+            "question_type": final_state.get("question_type", ""),
+            "retrieval_count": len(final_state.get("retrieval_results", [])),
+            "confidence": final_state.get("confidence", 0.0),
+            "source_documents": [
+                {
+                    "file_name": r["file_name"],
+                    "content": r["content"][:200] + "..." if len(r["content"]) > 200 else r["content"],
+                    "score": r["score"]
+                }
+                for r in final_state.get("retrieval_results", [])
+            ],
+            "chat_history": final_state.get("chat_history", [])
+        }
+
+    def clear_memory(self):
+        """清空对话记忆"""
+        try:
+            config = {"configurable": {"thread_id": "default_session"}}
+            self.workflow.delete_state(config)
+            print("对话记忆已清空")
+        except Exception as e:
+            print(f"清空记忆失败: {e}")

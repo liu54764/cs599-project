@@ -2,7 +2,6 @@
 
 该模块提供核心的问答功能，支持多种回答策略：
 - 基于 LangGraph 的复杂工作流（默认）
-- 基于 LangChain 的标准 RAG 链
 - 自研的基础问答逻辑（回退方案）
 
 核心组件：
@@ -23,14 +22,6 @@ from .prompt_templates import (
 )
 from .question_classifier import QuestionClassifier
 from knowledge_base import KnowledgeManager, RetrievalResult
-
-# 尝试导入 LCEL QA 引擎（最高优先级）
-try:
-    from .lcel_qa_engine import LCELQAEngine
-
-    LCEL_AVAILABLE = True
-except ImportError:
-    LCEL_AVAILABLE = False
 
 # 尝试导入 LangGraph 工作流
 try:
@@ -85,10 +76,9 @@ class QAEngine:
         self.knowledge_manager = KnowledgeManager()
         self.config = QA_CONFIG
         self.langgraph_workflow = None
-        self.langchain_engine = None
 
     def answer_question(self, query: str, chat_history: List = None,
-                        use_langgraph: bool = True, use_langchain: bool = False) -> Dict[str, Any]:
+                        use_langgraph: bool = True) -> Dict[str, Any]:
         """
         回答用户的自然语言问题，支持多轮对话记忆
 
@@ -104,7 +94,6 @@ class QAEngine:
             query: 用户问题
             chat_history: 对话历史，格式为 [(question1, answer1), (question2, answer2)]
             use_langgraph: 是否使用LangGraph工作流（默认启用）
-            use_langchain: 是否使用LangChain引擎（优先级低于langgraph）
         Returns:
             包含回答和来源的字典，结构如下：
             {
@@ -115,10 +104,8 @@ class QAEngine:
                 "confidence": float      # 回答置信度
             }
         """
-        # 优先级：LCEL > LangGraph > 自研
-        if LCEL_AVAILABLE:
-            return self._answer_with_lcel(query, chat_history)
-        elif use_langgraph and LANGGRAPH_AVAILABLE:
+        # 优先级：LangGraph > 自研（仅使用 LangGraph）
+        if LANGGRAPH_AVAILABLE:
             return self._answer_with_langgraph(query, chat_history)
 
         # 自研模式（基础逻辑）
@@ -128,16 +115,58 @@ class QAEngine:
         """
         流式回答用户的自然语言问题，支持多轮对话记忆
 
+        优先使用 LangGraph 工作流（支持内置 Memory 和历史压缩）
+        回退到自研逻辑
+
         Args:
             query: 用户问题
             chat_history: 对话历史，格式为 [(question1, answer1), (question2, answer2)]
         Yields:
             字典，包含流式回答块和来源信息
         """
-        # 构建上下文感知的查询
+        # 优先级：LangGraph > 自研（仅使用 LangGraph）
+        if LANGGRAPH_AVAILABLE:
+            try:
+                return self._answer_stream_with_langgraph(query, chat_history)
+            except Exception as e:
+                print(f"LangGraph流式回答失败，回退到自研逻辑: {e}")
+
+        # 回退到自研流式逻辑
+        return self._answer_stream_with_basic_logic(query, chat_history)
+
+    def _answer_stream_with_langgraph(self, query: str, chat_history: List = None) -> Generator[Dict[str, Any], None, None]:
+        """使用 LangGraph 工作流进行流式回答（支持内置 Memory 和历史压缩）"""
+        if self.langgraph_workflow is None:
+            try:
+                self.langgraph_workflow = LangGraphRAGWorkflow()
+            except Exception as e:
+                print(f"LangGraph工作流初始化失败: {e}")
+                return self._answer_stream_with_basic_logic(query, chat_history)
+
+        try:
+            # 使用 LangGraph 工作流流式获取结果
+            for event in self.langgraph_workflow.stream(query, chat_history=chat_history):
+                if event["type"] == "answer":
+                    content = event["content"]
+                    for chunk in self._stream_text(content):
+                        yield {"chunk": chunk, "is_finished": False}
+                elif event["type"] == "finished":
+                    yield {
+                        "chunk": "",
+                        "is_finished": True,
+                        "source_documents": event.get("source_documents", []),
+                        "retrieval_count": event.get("retrieval_count", 0),
+                        "question_type": event.get("question_type", "knowledge_with_retrieval")
+                    }
+
+        except Exception as e:
+            print(f"LangGraph工作流执行失败: {e}")
+            return self._answer_stream_with_basic_logic(query, chat_history)
+
+    def _answer_stream_with_basic_logic(self, query: str, chat_history: List = None) -> Generator[Dict[str, Any], None, None]:
+        """使用自研基础逻辑进行流式回答（回退方案）"""
         context_aware_query = self._build_context_aware_query(query, chat_history)
 
-        # 判断问题类型（优先使用多Agent分类器）
         if MULTI_AGENT_AVAILABLE:
             try:
                 classifier = MultiAgentQuestionClassifier()
@@ -160,7 +189,6 @@ class QAEngine:
         else:
             question_type = QuestionClassifier.classify(context_aware_query)
 
-        # 闲聊类问题，直接用LLM回答
         if question_type == 'chat':
             prompt = self._build_chat_prompt(query, chat_history)
             for chunk in self.llm_client.stream_complete(
@@ -177,7 +205,6 @@ class QAEngine:
             }
             return
 
-        # 知识类问题，先检索知识库
         retrieval_results = self.knowledge_manager.search_knowledge_base(
             context_aware_query,
             top_k=self.config["retrieval_top_k"]
@@ -201,7 +228,6 @@ class QAEngine:
                 "question_type": "knowledge_with_retrieval"
             }
         else:
-            # 无检索结果，使用LLM内置知识回答
             prompt = self._build_internal_knowledge_prompt(query, chat_history)
             full_answer = ""
 
@@ -251,38 +277,6 @@ class QAEngine:
                 history_context += f"用户：{q}\n助手：{a}\n"
 
         return f"""{history_context}知识库中未检索到与当前问题直接相关的文献内容，将基于内置知识回答。\n\n用户问题：{query}\n\n如果你的知识中也没有相关信息，请直接说："抱歉，我无法回答这个问题。"不要编造信息，不要猜测，保持回答真实可靠。"""
-
-    def _answer_with_lcel(self, query: str, chat_history: List = None) -> Dict[str, Any]:
-        """使用 LCEL 引擎回答问题（最高优先级）"""
-        if not hasattr(self, 'lcel_engine') or self.lcel_engine is None:
-            try:
-                from .lcel_qa_engine import LCELQAEngine
-                self.lcel_engine = LCELQAEngine()
-            except Exception as e:
-                print(f"LCEL引擎初始化失败，回退到LangGraph: {e}")
-                if LANGGRAPH_AVAILABLE:
-                    return self._answer_with_langgraph(query, chat_history)
-                return self._answer_with_basic_logic(query, chat_history)
-
-        try:
-            # 如果有对话历史，使用带记忆的问答
-            if chat_history:
-                result = self.lcel_engine.answer_with_memory(query, chat_history)
-            else:
-                result = self.lcel_engine.answer_with_sources(query)
-
-            return {
-                "answer": result.get("answer", ""),
-                "source_documents": result.get("source_documents", []),
-                "retrieval_count": len(result.get("source_documents", [])),
-                "question_type": result.get("question_type", "knowledge_with_retrieval"),
-                "confidence": 0.8
-            }
-        except Exception as e:
-            print(f"LCEL引擎执行失败，回退到LangGraph: {e}")
-            if LANGGRAPH_AVAILABLE:
-                return self._answer_with_langgraph(query, chat_history)
-            return self._answer_with_basic_logic(query, chat_history)
 
     def _answer_with_basic_logic(self, query: str, chat_history: List = None) -> Dict[str, Any]:
         """使用自研基础逻辑回答问题"""

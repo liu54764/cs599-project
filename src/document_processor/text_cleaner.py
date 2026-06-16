@@ -25,6 +25,9 @@ class TextCleaner:
         if self.config["remove_page_numbers"]:
             cleaned_text = self._remove_page_numbers(cleaned_text)
 
+        if self.config["remove_consecutive_duplicates"]:
+            cleaned_text = self._remove_consecutive_duplicates(cleaned_text)
+
         if self.config["remove_extra_spaces"]:
             cleaned_text = self._remove_extra_spaces(cleaned_text)
 
@@ -153,6 +156,48 @@ class TextCleaner:
         # 匹配单独一行的数字（页码）
         page_number_pattern = re.compile(r'^\s*\d+\s*$', re.MULTILINE)
         return page_number_pattern.sub('', text)
+
+    def _remove_consecutive_duplicates(self, text: str) -> str:
+        """移除连续重复的字符（处理双层文本或OCR导致的重复）"""
+        if not text:
+            return ""
+        
+        result = []
+        i = 0
+        while i < len(text):
+            current_char = text[i]
+            
+            # 检查是否是双层文本导致的重复模式（每个字符重复2次）
+            # 如 "十十五五" -> "十五", "高高高级级" -> "高级"
+            # 但 "标准标准" 不处理（这是单词重复，不是字符重复）
+            
+            # 只有当连续重复 >= 3次才移除（防止误删正常的双字词）
+            # 或者是连续重复2次且下一个字符也形成重复模式
+            if i + 2 < len(text) and text[i + 1] == current_char and text[i + 2] == current_char:
+                # 连续重复3次及以上，只保留一个
+                j = i
+                while j < len(text) and text[j] == current_char:
+                    j += 1
+                result.append(current_char)
+                i = j
+            elif i + 1 < len(text) and text[i + 1] == current_char:
+                # 连续重复2次，检查是否是双层文本模式
+                # 双层文本模式：每个字符都重复2次，如 "aabbccddeeff"
+                # 检查下一个字符是否也重复
+                if i + 3 < len(text) and text[i + 2] == text[i + 3]:
+                    # 是双层文本模式，只保留一个
+                    result.append(current_char)
+                    i += 2
+                else:
+                    # 不是双层文本模式，保留两个（可能是故意重复）
+                    result.append(current_char)
+                    result.append(current_char)
+                    i += 2
+            else:
+                result.append(current_char)
+                i += 1
+        
+        return ''.join(result)
 
     def _remove_extra_spaces(self, text: str) -> str:
         """移除多余的空格和制表符"""

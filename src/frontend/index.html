@@ -59,17 +59,17 @@
         </header>
 
         <!-- grid加items-stretch 三栏自动上下等高，固定高度 -->
-        <div class="grid grid-cols-1 lg:grid-cols-[260px_0.8fr_1.7fr] gap-5 items-stretch flex-1 overflow-hidden">
+        <div class="grid grid-cols-1 lg:grid-cols-[260px_0.6fr_1.7fr] gap-5 items-stretch flex-1 overflow-hidden">
             <!-- 左栏：上传+统计+知识库 | 固定高度，内容可滚动 -->
             <div class="lg:col-span-1 space-y-3 flex flex-col overflow-hidden">
                 <!-- 上传面板：调小尺寸 -->
                 <div class="bg-white rounded-xl shadow-sm p-2 flex-shrink-0 min-h-[230px]">
-                    <h2 class="text-sm font-semibold text-gray-800 mb-2"><i class="fa fa-cloud-upload text-primary mr-1.5"></i>上传PDF文献</h2>
+                    <h2 class="text-xm font-semibold text-gray-800 mb-2 mt-3"><i class="fa fa-cloud-upload text-primary mr-1.5"></i>上传PDF文献</h2>
                     <div id="dropZone" class="border-2 border-dashed border-gray-300 rounded-lg p-3 text-center cursor-pointer hover:border-primary hover:bg-gray-50 transition-all">
                         <i class="fa fa-file-pdf-o text-2xl text-gray-400 mb-1.5"></i>
                         <p class="text-gray-600 text-sm">拖拽PDF至此 / 点击选择文件</p>
                         <input type="file" id="fileInput" accept=".pdf" multiple class="hidden">
-                        <button id="selectFilesBtn" class="mt-1.5 bg-primary text-white px-3 py-1.5 rounded-lg text-sm">选择文件</button>
+                        <button id="selectFilesBtn" class="mt-1.5 bg-primary text-white px-3 py-1.5 rounded-lg text-sm font-semibold">选择文件</button>
                     </div>
                     <div id="uploadProgress" class="mt-2 hidden">
                         <div class="flex justify-between items-center mb-1.5">
@@ -101,14 +101,14 @@
                 <div class="bg-white rounded-xl shadow-sm p-3 flex-1 flex flex-col overflow-hidden">
                     <div class="flex justify-between items-center mb-2 flex-shrink-0">
                         <h2 class="text-base font-semibold text-gray-800"><i class="fa fa-database text-primary mr-2"></i>向量知识库</h2>
-                        <button id="refreshKBStatsBtn" class="text-xs text-primary"><i class="fa fa-refresh"></i></button>
+                        <button id="refreshKBStatsBtn" class="text-xs text-primary font-semibold"><i class="fa fa-refresh"></i></button>
                     </div>
                     <div class="space-y-2 overflow-y-auto scrollbar-thin flex-1">
                         <div class="flex justify-between items-center"><span class="text-gray-600 text-sm">入库文献</span><span id="kbDocumentCount" class="text-lg font-bold text-primary">0</span></div>
                         <div class="flex justify-between items-center"><span class="text-gray-600 text-sm">向量分片</span><span id="kbChunkCount" class="text-lg font-bold text-primary">0</span></div>
                         <div class="flex justify-between items-center"><span class="text-gray-600 text-sm">嵌入维度</span><span id="kbEmbeddingDim" class="text-lg font-bold text-primary">-</span></div>
                     </div>
-                    <button id="clearKBBtn" class="w-full mt-2 bg-danger/10 text-danger py-1.5 rounded text-sm hover:bg-danger/20 flex-shrink-0">清空知识库</button>
+                    <button id="clearKBBtn" class="w-full mt-2 bg-danger/10 text-danger py-1.5 rounded text-sm hover:bg-danger/20 flex-shrink-0 font-semibold">清空知识库</button>
                 </div>
             </div>
 
@@ -116,10 +116,10 @@
             <div class="lg:col-span-1 flex flex-col overflow-hidden">
                 <div class="bg-white rounded-xl shadow-sm p-4 h-full flex flex-col">
                     <div class="flex justify-between items-center mb-3 flex-shrink-0">
-                        <h2 class="text-xl font-semibold text-gray-800"><i class="fa fa-list-alt text-primary mr-2"></i>文献列表</h2>
+                        <h2 class="text-xm font-semibold text-gray-800"><i class="fa fa-list-alt text-primary mr-2"></i>文献列表</h2>
                         <div class="flex gap-2">
-                            <button id="refreshBtn" class="text-sm text-primary"><i class="fa fa-refresh"></i>刷新</button>
-                            <button id="startCompareBtn" class="text-sm bg-warning/10 text-warning px-3 py-1.5 rounded">批量对比</button>
+                            <button id="refreshBtn" class="text-sm text-primary font-semibold"><i class="fa fa-refresh"></i>刷新</button>
+                            <button id="startCompareBtn" class="text-sm bg-warning/10 text-warning px-3 py-1.5 rounded font-semibold">批量对比</button>
                         </div>
                     </div>
                     <div class="text-sm text-gray-500 mb-3 flex-shrink-0">已勾选 <span id="selectCount">0</span> 篇用于对比</div>
@@ -130,31 +130,44 @@
                 </div>
             </div>
 
-            <!-- 右栏：RAG区域加宽，聊天框拉高，解决对话过小 -->
-            <div class="lg:col-span-1 space-y-4 flex flex-col overflow-hidden">
-                <!-- DeepSeek RAG对话：聊天框360→450高度扩容 -->
-                <div class="bg-white rounded-xl shadow-sm p-4 flex-1 flex flex-col overflow-hidden">
-                    <div class="flex justify-between items-center mb-3 flex-shrink-0">
-                        <h2 class="text-lg font-semibold text-gray-800"><i class="fa fa-comments text-primary mr-2"></i>DeepSeek RAG智能问答</h2>
-                        <button id="clearChatBtn" class="text-sm text-gray-500 hover:text-danger" onclick="clearChatHistory()"><i class="fa fa-trash-o"></i> 清除对话</button>
+            <!-- 右栏：整合智能问答和检索功能，支持切换 -->
+            <div class="lg:col-span-1 flex flex-col overflow-hidden">
+                <div class="bg-white rounded-xl shadow-sm flex-1 flex flex-col overflow-hidden">
+                    <!-- 切换标签 -->
+                    <div class="flex border-b flex-shrink-0">
+                        <button id="tabQa" class="flex-1 px-4 py-3 text-sm font-semibold text-primary border-b-2 border-primary bg-primary/5">
+                            <i class="fa fa-comments mr-2"></i>智能问答
+                        </button>
+                        <button id="tabSearch" class="flex-1 px-4 py-3 text-sm font-semibold text-gray-500 border-b-2 border-transparent hover:text-gray-700">
+                            <i class="fa fa-search mr-2"></i>知识库检索
+                        </button>
                     </div>
-                    <div id="chatBox" class="flex-1 overflow-y-auto scrollbar-thin bg-chatbg rounded-lg p-3 mb-3 space-y-3">
-                        <div class="text-center text-gray-500 py-12 text-sm text-gray-500">输入问题，基于已入库文献回答<br><span class="text-xs text-gray-400">支持多轮对话记忆</span></div>
+                    <!-- 智能问答面板 -->
+                    <div id="panelQa" class="flex-1 flex flex-col overflow-hidden">
+                        <div class="flex justify-between items-center px-4 py-3 border-b flex-shrink-0">
+                            <h2 class="text-base font-semibold text-gray-800">DeepSeek RAG智能问答</h2>
+                            <button id="clearChatBtn" class="text-sm text-gray-500 hover:text-danger font-semibold" onclick="clearChatHistory()"><i class="fa fa-trash-o"></i> 清除对话</button>
+                        </div>
+                        <div id="chatBox" class="flex-1 overflow-y-auto scrollbar-thin bg-chatbg p-4 space-y-3">
+                            <div class="text-center text-gray-500 py-12 text-sm text-gray-500">输入问题，基于已入库文献回答<br><span class="text-xs text-gray-400">支持多轮对话记忆</span></div>
+                        </div>
+                        <div class="flex gap-2 px-4 py-3 border-t flex-shrink-0">
+                            <input id="qaInput" placeholder="例如：论文的实验方法是什么？" class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+                            <button id="sendQaBtn" class="bg-primary text-white px-4 py-2 rounded-lg text-sm font-semibold">发送</button>
+                        </div>
                     </div>
-                    <div class="flex gap-2 flex-shrink-0">
-                        <input id="qaInput" placeholder="例如：论文的实验方法是什么？" class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary">
-                        <button id="sendQaBtn" class="bg-primary text-white px-3 py-2 rounded-lg text-sm">发送</button>
-                    </div>
-                </div>
-                <!-- 知识库片段检索 -->
-                <div class="bg-white rounded-xl shadow-sm p-4 flex-shrink-0">
-                    <h2 class="text-lg font-semibold text-gray-800 mb-3"><i class="fa fa-search text-primary mr-2"></i>知识库片段检索</h2>
-                    <div class="flex gap-2 mb-3 flex-shrink-0">
-                        <input type="text" id="searchQuery" placeholder="关键词检索文献片段" class="flex-1 px-3 py-2 border rounded text-sm">
-                        <button id="searchBtn" class="bg-primary text-white px-3 py-2 rounded text-sm">检索</button>
-                    </div>
-                    <div id="searchResults" class="max-h-[220px] overflow-y-auto scrollbar-thin space-y-2">
-                        <div class="text-center text-gray-500 py-6 text-gray-500 text-sm">输入内容检索</div>
+                    <!-- 知识库检索面板 -->
+                    <div id="panelSearch" class="flex-1 flex flex-col overflow-hidden hidden">
+                        <div class="px-4 py-3 border-b flex-shrink-0">
+                            <h2 class="text-base font-semibold text-gray-800">知识库片段检索</h2>
+                        </div>
+                        <div class="flex gap-2 px-4 py-3 border-b flex-shrink-0">
+                            <input type="text" id="searchQuery" placeholder="关键词检索文献片段" class="flex-1 px-3 py-2 border rounded text-sm">
+                            <button id="searchBtn" class="bg-primary text-white px-4 py-2 rounded text-sm font-semibold">检索</button>
+                        </div>
+                        <div id="searchResults" class="flex-1 overflow-y-auto scrollbar-thin px-4 py-3 space-y-2">
+                            <div class="text-center text-gray-500 py-12 text-gray-500 text-sm">输入内容检索</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -189,8 +202,8 @@
                     <p class="text-xs text-gray-500 mt-2">.pdf 后缀会自动保留</p>
                 </div>
                 <div class="flex justify-end gap-2">
-                    <button id="cancelRenameBtn" class="px-4 py-2 border rounded-lg text-gray-600 hover:bg-gray-50">取消</button>
-                    <button id="confirmRenameBtn" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90">确认</button>
+                    <button id="cancelRenameBtn" class="px-4 py-2 border rounded-lg text-gray-600 hover:bg-gray-50 font-semibold">取消</button>
+                    <button id="confirmRenameBtn" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 font-semibold">确认</button>
                 </div>
             </div>
         </div>
@@ -237,6 +250,12 @@
         const closeRenameBtn = document.getElementById('closeRenameBtn');
         const cancelRenameBtn = document.getElementById('cancelRenameBtn');
         const confirmRenameBtn = document.getElementById('confirmRenameBtn');
+        
+        // 标签切换DOM
+        const tabQa = document.getElementById('tabQa');
+        const tabSearch = document.getElementById('tabSearch');
+        const panelQa = document.getElementById('panelQa');
+        const panelSearch = document.getElementById('panelSearch');
         let currentRenameDocId = null;
 
         // 知识库DOM
@@ -321,6 +340,24 @@
                     performSearch();
                 }
             });
+
+            // 标签切换
+            tabQa.onclick = function() {
+                tabQa.classList.add('text-primary', 'border-b-2', 'border-primary', 'bg-primary/5');
+                tabQa.classList.remove('text-gray-500', 'border-transparent');
+                tabSearch.classList.add('text-gray-500', 'border-transparent');
+                tabSearch.classList.remove('text-primary', 'border-b-2', 'border-primary', 'bg-primary/5');
+                panelQa.classList.remove('hidden');
+                panelSearch.classList.add('hidden');
+            };
+            tabSearch.onclick = function() {
+                tabSearch.classList.add('text-primary', 'border-b-2', 'border-primary', 'bg-primary/5');
+                tabSearch.classList.remove('text-gray-500', 'border-transparent');
+                tabQa.classList.add('text-gray-500', 'border-transparent');
+                tabQa.classList.remove('text-primary', 'border-b-2', 'border-primary', 'bg-primary/5');
+                panelSearch.classList.remove('hidden');
+                panelQa.classList.add('hidden');
+            };
 
             // RAG问答
             sendQaBtn.onclick = sendQA;
@@ -441,22 +478,22 @@
             documentList.innerHTML=documents.map(doc=>{
                 const isSel = selectedIds.includes(doc.document_id);
                 return `
-                <div class="border rounded-lg p-3 ${isSel?'selected-item':''}">
-                    <div class="flex justify-between items-start gap-2">
+                <div class="border rounded-md p-2 ${isSel?'selected-item':''}">
+                    <div class="flex justify-between items-start gap-1.5">
                         <div class="flex-1 min-w-0">
-                            <div class="flex items-center gap-2">
+                            <div class="flex items-center gap-1.5">
                                 <input type="checkbox" class="cmp-check" data-id="${doc.document_id}" ${isSel?'checked':''}>
-                                <h3 class="font-medium text-sm line-clamp-2 break-all">${doc.file_name}</h3>
+                                <h3 class="font-medium text-xs line-clamp-2 break-all">${doc.file_name}</h3>
                             </div>
-                            <p class="text-xs text-gray-500 mt-1 truncate">${doc.authors.length?doc.authors.join(','):'未知作者'}</p>
+                            <p class="text-xs text-gray-500 mt-0.5 truncate">${doc.authors.length?doc.authors.join(','):'未知作者'}</p>
                         </div>
                     </div>
-                    <div class="flex gap-1.5 mt-2 flex-wrap">
-                        <button onclick="viewDocument('${doc.document_id}')" class="text-sm px-2.5 py-1 bg-primary/10 text-primary rounded">查看</button>
-                        <button onclick="renameDocument('${doc.document_id}','${doc.file_name}')" class="text-sm px-2.5 py-1 bg-secondary/10 text-secondary rounded">重命名</button>
-                        <button onclick="addToKB('${doc.document_id}',this)" class="text-sm px-2.5 py-1 bg-success/10 text-success rounded">入库</button>
-                        <button onclick="singleSummary('${doc.document_id}',this)" class="text-sm px-2.5 py-1 bg-warning/10 text-warning rounded">论文精读</button>
-                        <button onclick="delDoc('${doc.document_id}',this)" class="text-sm px-2.5 py-1 bg-danger/10 text-danger rounded">删除</button>
+                    <div class="flex gap-0.5 mt-1.5 flex-wrap">
+                        <button onclick="viewDocument('${doc.document_id}')" class="text-xs px-1.5 py-0.5 bg-primary/10 text-primary rounded font-semibold">查看</button>
+                        <button onclick="renameDocument('${doc.document_id}','${doc.file_name}')" class="text-xs px-1.5 py-0.5 bg-secondary/10 text-secondary rounded font-semibold">重命名</button>
+                        <button onclick="addToKB('${doc.document_id}',this)" class="text-xs px-1.5 py-0.5 bg-success/10 text-success rounded font-semibold">入库</button>
+                        <button onclick="singleSummary('${doc.document_id}',this)" class="text-xs px-1.5 py-0.5 bg-warning/10 text-warning rounded font-semibold">论文精读</button>
+                        <button onclick="delDoc('${doc.document_id}',this)" class="text-xs px-1.5 py-0.5 bg-danger/10 text-danger rounded font-semibold">删除</button>
                     </div>
                 </div>`
             }).join('');

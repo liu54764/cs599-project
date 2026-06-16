@@ -399,39 +399,7 @@ async def clear_knowledge_base():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ==========新增：DeepSeek RAG问答三个接口==========
-@app.post("/api/qa/ask", response_model=QAResponse)
-async def ask_question(request: QARequest):
-    """基于知识库RAG问答，支持多轮对话记忆"""
-    try:
-        # 如果有对话历史且启用记忆，使用带记忆的问答
-        if request.chat_history and request.use_memory:
-            # 转换对话历史格式
-            history = []
-            for i in range(0, len(request.chat_history), 2):
-                if i + 1 < len(request.chat_history):
-                    user_msg = request.chat_history[i]
-                    ai_msg = request.chat_history[i + 1]
-                    if user_msg.role == "user" and ai_msg.role == "assistant":
-                        history.append((user_msg.content, ai_msg.content))
-            
-            res = qa_engine.answer_question(
-                query=request.query,
-                chat_history=history if history else None
-            )
-        else:
-            res = qa_engine.answer_question(request.query)
-        
-        return QAResponse(
-            success=True,
-            answer=res["answer"],
-            source_documents=res.get("source_documents", []),
-            retrieval_count=res.get("retrieval_count", 0),
-            question_type=res.get("question_type", "knowledge_with_retrieval")
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+# ========== DeepSeek RAG问答接口 ==========
 async def generate_stream(request: QARequest):
     """生成流式响应的异步生成器"""
     try:

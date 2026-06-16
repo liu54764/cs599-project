@@ -50,6 +50,8 @@ class VectorStore:
         self.embedding_service = EmbeddingService()
 
         # 初始化Chroma持久化客户端
+        import os
+        os.environ["CHROMA_TELEMETRY_ENABLED"] = "false"
         self.client = chromadb.PersistentClient(path=self.persist_directory)
 
         # 获取或创建集合（不使用内置嵌入函数，手动提供嵌入）

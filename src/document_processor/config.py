@@ -16,6 +16,7 @@ TEXT_CLEAN_CONFIG = {
     "remove_extra_spaces": True,    # 移除多余空格
     "fix_hyphenation": True,        # 修复连字符换行
     "remove_citations": False,      # 是否移除引用标记（默认保留）
+    "remove_consecutive_duplicates": True,  # 移除连续重复字符
 }
 
 # 支持的文件类型
