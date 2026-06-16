@@ -12,7 +12,7 @@
 
 - **AI IDE**: Trae CN
 - **LLM**: DeepSeek API
-- **框架**: LangGraph, LangChain (LCEL)
+- **框架**: LangGraph
 - **嵌入模型**: sentence-transformers/all-MiniLM-L6-v2
 - **向量数据库**: ChromaDB
 - **后端框架**: FastAPI
@@ -35,12 +35,13 @@ cs599-project/
 │   │   ├── embedding_service.py  # 文本向量化服务
 │   │   ├── vector_store.py       # 向量数据库存储
 │   │   ├── knowledge_manager.py  # 知识库管理
+│   │   ├── config.py             # 配置文件
 │   │   └── enhanced_retriever.py # 增强检索器
 │   ├── qa_module/             # 问答模块
 │   │   ├── qa_engine.py          # 核心问答引擎
 │   │   ├── llm_client.py         # LLM客户端
 │   │   ├── prompt_templates.py   # 提示词模板
-│   │   └── lcel_qa_engine.py     # LCEL问答引擎（基于LangChain Expression Language）
+│   │   └── langgraph_rag_workflow.py  # LangGraph工作流
 │   ├── frontend/              # 前端界面
 │   │   └── index.html            # 主界面文件
 │   ├── models/                # 模型文件
@@ -110,7 +111,29 @@ python main.py
 - ✅ 多文档对比分析
 - ✅ 流式输出（实时打字机效果）
 - ✅ 文件名重命名功能
+- ✅ 对话历史压缩（LangGraph内置Memory）
+- ✅ 问答/检索功能切换
 - ✅ 美观的 Web 界面
+
+## 配置说明
+
+### 检索配置 (`src/knowledge_base/config.py`)
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `top_k` | 5 | 返回结果数量 |
+| `score_threshold` | 0.4 | 分数阈值 |
+| `fetch_multiplier` | 2 | 检索扩展倍数 |
+| `vector_weight` | 0.5 | 向量检索权重 |
+| `bm25_weight` | 0.5 | BM25检索权重 |
+| `filter_threshold` | 0.3 | 过滤阈值 |
+
+### LangGraph 配置 (`src/qa_module/langgraph_rag_workflow.py`)
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `max_history_length` | 10 | 最大对话历史长度 |
+| `compression_threshold` | 5 | 触发历史压缩的阈值 |
 
 ## 项目状态
 
@@ -126,6 +149,7 @@ python main.py
 4. **智能问答**: 在右侧输入问题，系统基于知识库内容回答
 5. **论文精读**: 选择文档，点击「论文精读」生成详细摘要
 6. **文献对比**: 勾选多个文档，点击「批量对比」生成对比分析
+7. **知识库检索**: 切换到「知识库检索」标签进行关键词检索
 
 ## 许可证
 
